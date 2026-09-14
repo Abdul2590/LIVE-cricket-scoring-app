@@ -1,0 +1,6 @@
+{
+  "name": "CricLive",
+  "description": "Live cricket ball-to-ball scoring, match fixture manager, customizable stadium dashboard, custom teams, and PDF scorecard export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

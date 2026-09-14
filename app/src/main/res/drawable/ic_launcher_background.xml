@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="108"
+                android:endY="108"
+                android:type="linear">
+                <item android:color="#0B3C26" android:offset="0.0" />
+                <item android:color="#145A32" android:offset="0.5" />
+                <item android:color="#08291A" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Cricket Pitch & Oval Outfield Grass Stripes -->
+    <path
+        android:fillColor="#15FFFFFF"
+        android:pathData="M0,0 L108,108 L90,108 L0,18 Z" />
+    <path
+        android:fillColor="#10FFFFFF"
+        android:pathData="M18,0 L108,90 L108,72 L0,0 Z" />
+    <path
+        android:fillColor="#0DFFFFFF"
+        android:pathData="M0,36 L108,144 L72,144 L0,72 Z" />
+</vector>

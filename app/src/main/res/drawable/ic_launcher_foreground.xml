@@ -1,0 +1,60 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Left Bat Handle -->
+    <path
+        android:fillColor="#E0A96D"
+        android:pathData="M27,24 L31,20 L37,26 L33,30 Z" />
+    <path
+        android:fillColor="#5D4037"
+        android:pathData="M31,28 L35,24 L37,26 L33,30 Z" />
+    <!-- Left Bat Blade -->
+    <path
+        android:fillColor="#D4A373"
+        android:pathData="M33,30 L45,42 L79,76 C81,78 81,81 78,83 C76,85 73,85 71,83 L30,42 C28,40 28,35 30,33 Z" />
+    <path
+        android:fillColor="#BC8A5F"
+        android:pathData="M33,34 L45,46 L75,76 C77,78 77,80 75,81 L73,81 L32,40 Z" />
+
+    <!-- Right Bat Handle -->
+    <path
+        android:fillColor="#E0A96D"
+        android:pathData="M81,24 L77,20 L71,26 L75,30 Z" />
+    <path
+        android:fillColor="#5D4037"
+        android:pathData="M77,28 L73,24 L71,26 L75,30 Z" />
+    <!-- Right Bat Blade -->
+    <path
+        android:fillColor="#D4A373"
+        android:pathData="M75,30 L63,42 L29,76 C27,78 27,81 30,83 C32,85 35,85 37,83 L78,42 C80,40 80,35 78,33 Z" />
+    <path
+        android:fillColor="#BC8A5F"
+        android:pathData="M75,34 L63,46 L33,76 C31,78 31,80 33,81 L35,81 L76,40 Z" />
+
+    <!-- Center Cricket Ball -->
+    <path
+        android:fillColor="#D32F2F"
+        android:pathData="M54,39 A15,15 0 1,0 54,69 A15,15 0 1,0 54,39 Z" />
+    <!-- Ball Core Highlight -->
+    <path
+        android:fillColor="#FF5252"
+        android:pathData="M50,42 A6,6 0 1,0 50,54 A6,6 0 1,0 50,42 Z" />
+    <!-- Ball Seam Curve -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:pathData="M43,44 C48,49 48,59 43,64" />
+    <!-- Stitches -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1"
+        android:pathData="M41,46 L45,48 M42,51 L46,53 M42,56 L46,58 M41,61 L45,63" />
+
+    <!-- Gold Accent Star Badge -->
+    <path
+        android:fillColor="#FFD700"
+        android:pathData="M54,23 L55.5,27.5 L60,27.5 L56.5,30 L58,34.5 L54,32 L50,34.5 L51.5,30 L48,27.5 L52.5,27.5 Z" />
+</vector>
