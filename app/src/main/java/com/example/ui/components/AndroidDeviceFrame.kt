@@ -24,63 +24,20 @@ fun AndroidStatusBar(
     contentColor: Color = MaterialTheme.colorScheme.onSurface,
     modifier: Modifier = Modifier
 ) {
-    val currentTime = remember {
-        val sdf = SimpleDateFormat("h:mm", Locale.getDefault())
-        sdf.format(Date())
-    }
-
+    // Clean status bar area with optional subtle punch-hole cutout and no time/wifi/5G icons
     Row(
         modifier = modifier
             .fillMaxWidth()
             .background(backgroundColor)
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Left: Current Time
-        Text(
-            text = currentTime,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = contentColor
-        )
-
-        // Center: Camera Punch-hole Cutout
+        // Subtle Camera Punch-hole Cutout
         Surface(
             shape = CircleShape,
-            color = Color.Black,
-            modifier = Modifier.size(11.dp)
+            color = Color.Black.copy(alpha = 0.6f),
+            modifier = Modifier.size(10.dp)
         ) {}
-
-        // Right: 5G & Battery Icon
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = "5G",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Black,
-                color = contentColor
-            )
-            Icon(
-                imageVector = Icons.Default.SignalCellularAlt,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(14.dp)
-            )
-            Icon(
-                imageVector = Icons.Default.Wifi,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(14.dp)
-            )
-            Icon(
-                imageVector = Icons.Default.BatteryFull,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(14.dp)
-            )
-        }
     }
 }

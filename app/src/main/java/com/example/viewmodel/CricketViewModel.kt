@@ -8,10 +8,12 @@ import com.example.data.CricketRepository
 import com.example.model.*
 import com.example.util.ScorecardPdfGenerator
 import com.example.util.SoundManager
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -46,6 +48,10 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
     private val _userProfile = MutableStateFlow(repository.loadUserProfile())
     val userProfile: StateFlow<UserProfile> = _userProfile.asStateFlow()
 
+    private val _isAutoSaving = MutableStateFlow(false)
+    val isAutoSaving: StateFlow<Boolean> = _isAutoSaving.asStateFlow()
+    val isAutoSyncing: StateFlow<Boolean> = _isAutoSaving.asStateFlow() // alias for UI compatibility
+
     private val _backups = MutableStateFlow<List<BackupItem>>(emptyList())
     val backups: StateFlow<List<BackupItem>> = _backups.asStateFlow()
 
@@ -61,11 +67,12 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
 
     init {
-        val preset = repository.getPresetMatches()
-        _matches.value = preset
-        _activeMatch.value = preset.firstOrNull { it.status == MatchStatus.LIVE } ?: preset.firstOrNull()
+        val loaded = repository.loadMatches()
+        _matches.value = loaded
+        _activeMatch.value = loaded.firstOrNull { it.status == MatchStatus.LIVE } ?: loaded.firstOrNull()
         _customTeams.value = repository.loadCustomTeams()
         _backups.value = repository.loadBackups()
+        triggerAutoSaveToLocalStorage()
     }
 
     fun dismissCelebration() {
@@ -97,6 +104,12 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
     ) {
         val currentMatch = _activeMatch.value ?: return
         val inn = currentMatch.currentInnings ?: return
+
+        // Restrict bowling if an over was completed and new bowler has not been chosen
+        if (inn.isWaitingForNewBowler || inn.currentBowlerId.isBlank()) {
+            _statusMessage.value = "Over completed! Please select a new bowler to bowl over ${(inn.legalBalls / 6) + 1}."
+            return
+        }
 
         // 1. Snapshot current innings state for multi-level Undo
         undoStack.add(inn)
@@ -271,6 +284,7 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         val runsForRotation = when {
             extraType == ExtraType.NO_BALL && runsBat > 0 -> runsBat
             extraType == ExtraType.NO_BALL && extraRuns > 1 -> extraRuns - 1
+            extraType == ExtraType.WIDE && extraRuns > 1 -> extraRuns - 1
             extraType == ExtraType.BYE || extraType == ExtraType.LEG_BYE -> extraRuns
             else -> runsBat
         }
@@ -280,8 +294,8 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
             nextNonStrikerId = temp
         }
 
-        // End of over rotation
-        val isOverFinished = isLegal && (newLegalBalls % 6 == 0)
+        // End of over rotation & Bowler Enforcement
+        val isOverFinished = isLegal && (newLegalBalls % 6 == 0) && (newLegalBalls > 0)
         if (isOverFinished) {
             val temp = nextStrikerId
             nextStrikerId = nextNonStrikerId
@@ -313,8 +327,15 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
 
         // Check Innings or Match Completion
         val maxBalls = currentMatch.oversLimit * 6
-        val allOut = newWickets >= (currentMatch.battingTeam.players.size - 1)
-        val isInningsOver = newLegalBalls >= maxBalls || allOut
+        val squadSize = currentMatch.battingTeam.players.size
+        val maxAllowedWickets = if (squadSize > 1) minOf(10, squadSize - 1) else 10
+        val allOut = newWickets >= maxAllowedWickets || newWickets >= 10
+        val isInningsOver = (newLegalBalls >= maxBalls) || allOut
+
+        // Bowler change restriction
+        val lastBowlerId = bowlerId
+        val waitingForNewBowler = isOverFinished && !isInningsOver
+        val activeBowlerId = if (waitingForNewBowler) "" else bowlerId
 
         val updatedInnings = inn.copy(
             totalRuns = newTotalRuns,
@@ -323,6 +344,9 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
             extras = newExtras,
             strikerId = nextStrikerId,
             nonStrikerId = nextNonStrikerId,
+            currentBowlerId = activeBowlerId,
+            lastOverBowlerId = if (isOverFinished) lastBowlerId else inn.lastOverBowlerId,
+            isWaitingForNewBowler = waitingForNewBowler,
             battingStats = updatedBattingStats,
             bowlingStats = updatedBowlingStats,
             deliveries = updatedDeliveries,
@@ -333,13 +357,97 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         val updatedInningsList = currentMatch.innings.toMutableList()
         updatedInningsList[currentMatch.currentInningsIndex] = updatedInnings
 
-        val newMatch = currentMatch.copy(
-            innings = updatedInningsList,
-            status = if (isInningsOver && currentMatch.currentInningsIndex >= 1) MatchStatus.COMPLETED else currentMatch.status
-        )
+        if (currentMatch.currentInningsIndex == 0) {
+            if (isInningsOver) {
+                // 1st innings complete: prepare 2nd innings
+                val targetRuns = newTotalRuns + 1
+                val team2Batting = currentMatch.bowlingTeam
+                val team2Bowling = currentMatch.battingTeam
 
-        _activeMatch.value = newMatch
-        updateMatchInList(newMatch)
+                val str2 = team2Batting.players.getOrNull(0)?.id ?: ""
+                val nonStr2 = team2Batting.players.getOrNull(1)?.id ?: ""
+                val bwl2 = team2Bowling.players.getOrNull(10)?.id ?: team2Bowling.players.getOrNull(0)?.id ?: ""
+
+                val initialBattingStats2 = listOfNotNull(
+                    str2.takeIf { it.isNotBlank() }?.let { BattingStat(playerId = it) },
+                    nonStr2.takeIf { it.isNotBlank() }?.let { BattingStat(playerId = it) }
+                )
+                val initialBowlingStats2 = listOfNotNull(
+                    bwl2.takeIf { it.isNotBlank() }?.let { BowlingStat(playerId = it) }
+                )
+
+                val inn2 = if (updatedInningsList.size > 1) {
+                    updatedInningsList[1]
+                } else {
+                    Innings(
+                        battingTeamId = team2Batting.id,
+                        bowlingTeamId = team2Bowling.id,
+                        strikerId = str2,
+                        nonStrikerId = nonStr2,
+                        currentBowlerId = bwl2,
+                        battingStats = initialBattingStats2,
+                        bowlingStats = initialBowlingStats2
+                    )
+                }
+
+                val finalInningsList = if (updatedInningsList.size > 1) updatedInningsList else listOf(updatedInnings, inn2)
+                val newMatch = currentMatch.copy(
+                    innings = finalInningsList,
+                    currentInningsIndex = 1,
+                    status = MatchStatus.LIVE,
+                    resultText = "${team2Batting.name} need $targetRuns runs from ${currentMatch.oversLimit} overs"
+                )
+                _activeMatch.value = newMatch
+                updateMatchInList(newMatch)
+                _statusMessage.value = "1st Innings complete ($newTotalRuns/$newWickets). Target: $targetRuns runs"
+                SoundManager.playUmpireWhistle(isSound)
+            } else {
+                val newMatch = currentMatch.copy(innings = updatedInningsList)
+                _activeMatch.value = newMatch
+                updateMatchInList(newMatch)
+            }
+        } else {
+            // 2nd innings (Chase)
+            val firstInnRuns = currentMatch.innings.getOrNull(0)?.totalRuns ?: 0
+            val targetRuns = firstInnRuns + 1
+            val targetReached = newTotalRuns >= targetRuns
+            val isMatchOver = targetReached || isInningsOver
+
+            val resultMsg = when {
+                targetReached -> {
+                    val wLeft = (currentMatch.battingTeam.players.size - 1 - newWickets).coerceAtLeast(1)
+                    "${currentMatch.battingTeam.name} won by $wLeft wicket${if (wLeft > 1) "s" else ""}!"
+                }
+                isInningsOver && newTotalRuns < firstInnRuns -> {
+                    val runDiff = firstInnRuns - newTotalRuns
+                    "${currentMatch.bowlingTeam.name} won by $runDiff run${if (runDiff > 1) "s" else ""}!"
+                }
+                isInningsOver && newTotalRuns == firstInnRuns -> {
+                    "Match Tied! (${newTotalRuns} runs each)"
+                }
+                else -> {
+                    val runsNeeded = targetRuns - newTotalRuns
+                    val ballsLeft = (maxBalls - newLegalBalls).coerceAtLeast(0)
+                    "${currentMatch.battingTeam.name} need $runsNeeded runs in $ballsLeft balls"
+                }
+            }
+
+            val finalInnings = if (isMatchOver) updatedInnings.copy(isCompleted = true) else updatedInnings
+            updatedInningsList[currentMatch.currentInningsIndex] = finalInnings
+
+            val newMatch = currentMatch.copy(
+                innings = updatedInningsList,
+                status = if (isMatchOver) MatchStatus.COMPLETED else MatchStatus.LIVE,
+                resultText = resultMsg
+            )
+            _activeMatch.value = newMatch
+            updateMatchInList(newMatch)
+
+            if (isMatchOver) {
+                _celebration.value = CelebrationType.CENTURY
+                _statusMessage.value = "Match Completed! $resultMsg"
+            }
+        }
     }
 
     // --- Multi-Level Undo ---
@@ -410,6 +518,14 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
     fun changeBowler(bowlerId: String) {
         val currentMatch = _activeMatch.value ?: return
         val inn = currentMatch.currentInnings ?: return
+        val bowlingSquad = currentMatch.bowlingTeam.players
+
+        // Cricket rule: Bowler cannot bowl consecutive overs
+        if (inn.isWaitingForNewBowler && inn.lastOverBowlerId == bowlerId && bowlingSquad.size > 1) {
+            val bowlerName = bowlingSquad.find { it.id == bowlerId }?.name ?: "This bowler"
+            _statusMessage.value = "Consecutive overs rule: $bowlerName bowled the last over and cannot bowl back-to-back overs! Please select another bowler."
+            return
+        }
 
         val bowlingStats = inn.bowlingStats.toMutableList()
         if (bowlerId.isNotBlank() && bowlingStats.none { it.playerId == bowlerId }) {
@@ -418,6 +534,7 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
 
         val updatedInnings = inn.copy(
             currentBowlerId = bowlerId,
+            isWaitingForNewBowler = false,
             bowlingStats = bowlingStats
         )
         val updatedInningsList = currentMatch.innings.toMutableList()
@@ -425,7 +542,8 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         val newMatch = currentMatch.copy(innings = updatedInningsList)
         _activeMatch.value = newMatch
         updateMatchInList(newMatch)
-        _statusMessage.value = "Bowler changed"
+        val bowlerName = bowlingSquad.find { it.id == bowlerId }?.name ?: "Bowler"
+        _statusMessage.value = "$bowlerName is ready to bowl Over ${(inn.legalBalls / 6) + 1}"
     }
 
     // --- Edit Player Names & Details ---
@@ -499,6 +617,7 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         _customTeams.value = currentTeams
         repository.saveCustomTeams(currentTeams)
         _statusMessage.value = "Team ${team.name} saved successfully"
+        triggerAutoSaveToLocalStorage()
     }
 
     fun deleteCustomTeam(teamId: String) {
@@ -507,12 +626,14 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         _customTeams.value = currentTeams
         repository.saveCustomTeams(currentTeams)
         _statusMessage.value = "Team '${teamToDelete?.name ?: "Custom"}' deleted"
+        triggerAutoSaveToLocalStorage()
     }
 
     fun deleteAllCustomTeams() {
         _customTeams.value = emptyList()
         repository.saveCustomTeams(emptyList())
         _statusMessage.value = "All custom teams removed"
+        triggerAutoSaveToLocalStorage()
     }
 
     fun resetCustomTeamsToDefault() {
@@ -520,6 +641,7 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         _customTeams.value = defaults
         repository.saveCustomTeams(defaults)
         _statusMessage.value = "Reset teams to default custom squads"
+        triggerAutoSaveToLocalStorage()
     }
 
     fun exportTeamsJson(): String {
@@ -543,6 +665,7 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
             _customTeams.value = finalTeams
             repository.saveCustomTeams(finalTeams)
             _statusMessage.value = "Successfully imported ${parsedTeams.size} team(s)"
+            triggerAutoSaveToLocalStorage()
             Result.success(parsedTeams.size)
         } catch (e: Exception) {
             Result.failure(e)
@@ -561,7 +684,10 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         customOvers: Int,
         pitchCondition: String,
         tossWinnerId: String,
-        tossDecision: TossDecision
+        tossDecision: TossDecision,
+        openingStrikerId: String = "",
+        openingNonStrikerId: String = "",
+        openingBowlerId: String = ""
     ) {
         val overs = if (matchType == MatchType.CUSTOM) customOvers else matchType.defaultOvers
         val battingTeam = if (tossWinnerId == teamA.id) {
@@ -571,9 +697,19 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         }
         val bowlingTeam = if (battingTeam.id == teamA.id) teamB else teamA
 
-        val striker = battingTeam.players.getOrNull(0)?.id ?: ""
-        val nonStriker = battingTeam.players.getOrNull(1)?.id ?: ""
-        val bowler = bowlingTeam.players.getOrNull(10)?.id ?: bowlingTeam.players.getOrNull(0)?.id ?: ""
+        val striker = openingStrikerId.ifBlank { battingTeam.players.getOrNull(0)?.id ?: "" }
+        val nonStriker = openingNonStrikerId.ifBlank {
+            battingTeam.players.firstOrNull { it.id != striker }?.id
+                ?: battingTeam.players.getOrNull(1)?.id
+                ?: ""
+        }
+        val bowler = openingBowlerId.ifBlank {
+            bowlingTeam.players.find { it.role == PlayerRole.BOWLER }?.id
+                ?: bowlingTeam.players.find { it.role == PlayerRole.ALL_ROUNDER }?.id
+                ?: bowlingTeam.players.getOrNull(10)?.id
+                ?: bowlingTeam.players.getOrNull(0)?.id
+                ?: ""
+        }
 
         val initialBattingStats = listOfNotNull(
             striker.takeIf { it.isNotBlank() }?.let { BattingStat(playerId = it) },
@@ -614,9 +750,11 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         val list = listOf(newMatch) + _matches.value
         _matches.value = list
         _activeMatch.value = newMatch
+        repository.saveMatches(list)
         undoStack.clear()
         _canUndo.value = false
         _statusMessage.value = "New fixture created: $title"
+        triggerAutoSaveToLocalStorage()
     }
 
     fun deleteFixture(matchId: String) {
@@ -625,12 +763,14 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         if (matchIndex >= 0) {
             val deleted = currentMatches.removeAt(matchIndex)
             _matches.value = currentMatches
+            repository.saveMatches(currentMatches)
             if (_activeMatch.value?.id == matchId) {
                 _activeMatch.value = currentMatches.firstOrNull()
                 undoStack.clear()
                 _canUndo.value = false
             }
             _statusMessage.value = "Fixture '${deleted.teamA.shortCode} vs ${deleted.teamB.shortCode}' deleted"
+            triggerAutoSaveToLocalStorage()
         }
     }
 
@@ -639,12 +779,66 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         val completedCount = current.count { it.status == MatchStatus.COMPLETED }
         val remaining = current.filter { it.status != MatchStatus.COMPLETED }
         _matches.value = remaining
+        repository.saveMatches(remaining)
         if (_activeMatch.value?.status == MatchStatus.COMPLETED) {
             _activeMatch.value = remaining.firstOrNull()
             undoStack.clear()
             _canUndo.value = false
         }
         _statusMessage.value = "Cleared $completedCount completed fixture(s)"
+        triggerAutoSaveToLocalStorage()
+    }
+
+    fun switchInnings() {
+        val currentMatch = _activeMatch.value ?: return
+        if (currentMatch.currentInningsIndex == 0) {
+            val firstInn = currentMatch.innings.getOrNull(0) ?: return
+            val team2Batting = currentMatch.bowlingTeam
+            val team2Bowling = currentMatch.battingTeam
+
+            val str2 = team2Batting.players.getOrNull(0)?.id ?: ""
+            val nonStr2 = team2Batting.players.getOrNull(1)?.id ?: ""
+            val bwl2 = team2Bowling.players.getOrNull(10)?.id ?: team2Bowling.players.getOrNull(0)?.id ?: ""
+
+            val innList = currentMatch.innings.toMutableList()
+            innList[0] = firstInn.copy(isCompleted = true)
+
+            val inn2 = if (innList.size > 1) innList[1] else {
+                Innings(
+                    battingTeamId = team2Batting.id,
+                    bowlingTeamId = team2Bowling.id,
+                    strikerId = str2,
+                    nonStrikerId = nonStr2,
+                    currentBowlerId = bwl2,
+                    battingStats = listOfNotNull(
+                        str2.takeIf { it.isNotBlank() }?.let { BattingStat(playerId = it) },
+                        nonStr2.takeIf { it.isNotBlank() }?.let { BattingStat(playerId = it) }
+                    ),
+                    bowlingStats = listOfNotNull(
+                        bwl2.takeIf { it.isNotBlank() }?.let { BowlingStat(playerId = it) }
+                    )
+                )
+            }
+            val finalInnings = if (innList.size > 1) innList else listOf(innList[0], inn2)
+            val updated = currentMatch.copy(
+                innings = finalInnings,
+                currentInningsIndex = 1,
+                status = MatchStatus.LIVE,
+                resultText = "${team2Batting.name} need ${firstInn.totalRuns + 1} runs to win"
+            )
+            _activeMatch.value = updated
+            updateMatchInList(updated)
+            undoStack.clear()
+            _canUndo.value = false
+            _statusMessage.value = "Switched to 2nd Innings (${team2Batting.shortCode} batting)"
+        } else {
+            val updated = currentMatch.copy(currentInningsIndex = 0)
+            _activeMatch.value = updated
+            updateMatchInList(updated)
+            undoStack.clear()
+            _canUndo.value = false
+            _statusMessage.value = "Switched to 1st Innings (${currentMatch.teamA.shortCode})"
+        }
     }
 
     // --- Dashboard Settings ---
@@ -677,43 +871,259 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         repository.saveDashboardSettings(updated)
     }
 
-    // --- Google Account Login / Switch User ---
+    // --- Local Storage Auto-Save Engine ---
 
-    fun switchGoogleUser(name: String, email: String) {
-        val initials = name.split(" ").mapNotNull { it.firstOrNull()?.uppercase() }.take(2).joinToString("")
-        val profile = UserProfile(
-            id = "google_user_${System.currentTimeMillis()}",
-            displayName = name,
-            email = email,
-            photoInitials = if (initials.isNotBlank()) initials else "GU",
-            isGoogleUser = true
+    fun updateScorerProfile(name: String, role: String, email: String) {
+        val cleanName = name.trim().ifBlank { "Rehman Shaikh" }
+        val cleanRole = role.trim().ifBlank { "Lead Scorer & Match Official" }
+        val initials = cleanName.split(" ").mapNotNull { it.firstOrNull()?.uppercase() }.take(2).joinToString("").ifBlank { "RS" }
+        val updated = _userProfile.value.copy(
+            displayName = cleanName,
+            role = cleanRole,
+            email = email.trim(),
+            photoInitials = initials
         )
-        _userProfile.value = profile
-        repository.saveUserProfile(profile)
-        _statusMessage.value = "Logged in as ${profile.displayName}"
+        _userProfile.value = updated
+        repository.saveUserProfile(updated)
+        _statusMessage.value = "Scorer profile updated: $cleanName"
+        triggerAutoSaveToLocalStorage()
     }
 
-    // --- Google Drive Cloud Backup & Restore ---
-
-    fun backupToDrive() {
-        val match = _activeMatch.value ?: return
-        val json = serializeMatchToJson(match)
-        val dateFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
-        val sizeKb = (json.length / 1024).coerceAtLeast(1)
-
-        val item = BackupItem(
-            matchTitle = "${match.teamA.shortCode} vs ${match.teamB.shortCode} (${match.tournament})",
-            timestamp = System.currentTimeMillis(),
-            formattedDate = dateFmt,
-            fileSizeKb = sizeKb,
-            jsonContent = json,
-            matchId = match.id
+    fun toggleAutoSave(enabled: Boolean) {
+        val updated = _userProfile.value.copy(
+            autoSaveEnabled = enabled,
+            storageStatusDescription = if (enabled) "Auto-save to local storage active" else "Auto-save paused"
         )
+        _userProfile.value = updated
+        repository.saveUserProfile(updated)
+        _statusMessage.value = if (enabled) "Auto-save enabled for all application data" else "Auto-save paused"
+        if (enabled) {
+            triggerAutoSaveToLocalStorage(forceImmediate = true)
+        }
+    }
 
-        val list = listOf(item) + _backups.value
-        _backups.value = list
-        repository.saveBackups(list)
-        _statusMessage.value = "Match backed up to Google Drive (JSON)"
+    fun saveManualBackupSnapshot() {
+        triggerAutoSaveToLocalStorage(forceImmediate = true)
+        _statusMessage.value = "Saved backup snapshot to local storage"
+    }
+
+    fun triggerAutoSaveToLocalStorage(forceImmediate: Boolean = false) {
+        val profile = _userProfile.value
+        if (!profile.autoSaveEnabled && !forceImmediate) return
+
+        viewModelScope.launch {
+            _isAutoSaving.value = true
+            try {
+                val now = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                val matches = _matches.value
+                val active = _activeMatch.value
+                val teams = _customTeams.value
+
+                val rootObj = JSONObject()
+                rootObj.put("storageType", "Local Internal Device Storage")
+                rootObj.put("scorerName", profile.displayName)
+                rootObj.put("scorerRole", profile.role)
+                rootObj.put("scorerEmail", profile.email)
+                rootObj.put("lastSaveTimestamp", System.currentTimeMillis())
+                rootObj.put("lastSaveFormatted", now)
+                rootObj.put("totalMatches", matches.size)
+                rootObj.put("totalCustomTeams", teams.size)
+
+                // Package matches
+                val matchesArr = JSONArray()
+                matches.forEach { m ->
+                    try {
+                        matchesArr.put(JSONObject(serializeMatchToJson(m)))
+                    } catch (e: Exception) {
+                        Log.w("CricketViewModel", "Match serialization error: ${e.message}")
+                    }
+                }
+                rootObj.put("matches", matchesArr)
+
+                // Package active match
+                if (active != null) {
+                    try {
+                        rootObj.put("activeMatch", JSONObject(serializeMatchToJson(active)))
+                    } catch (e: Exception) {
+                        Log.w("CricketViewModel", "Active match serialization error: ${e.message}")
+                    }
+                }
+
+                // Package custom squads
+                val teamsArr = JSONArray()
+                teams.forEach { t ->
+                    val tObj = JSONObject()
+                    tObj.put("id", t.id)
+                    tObj.put("name", t.name)
+                    tObj.put("shortCode", t.shortCode)
+                    tObj.put("colorHex", t.colorHex)
+                    val pArr = JSONArray()
+                    t.players.forEach { p ->
+                        val pObj = JSONObject()
+                        pObj.put("id", p.id)
+                        pObj.put("name", p.name)
+                        pObj.put("role", p.role.name)
+                        pObj.put("battingStyle", p.battingStyle.name)
+                        pObj.put("bowlingStyle", p.bowlingStyle.name)
+                        pObj.put("isCaptain", p.isCaptain)
+                        pObj.put("isWicketKeeper", p.isWicketKeeper)
+                        pArr.put(pObj)
+                    }
+                    tObj.put("players", pArr)
+                    teamsArr.put(tObj)
+                }
+                rootObj.put("customTeams", teamsArr)
+
+                val payloadString = rootObj.toString()
+                repository.saveAllAppDataToLocalStorage(payloadString)
+
+                val updatedProfile = profile.copy(
+                    lastAutoSaveTime = now,
+                    totalSavedMatches = matches.size,
+                    storageStatusDescription = "Auto-saved locally at $now"
+                )
+                _userProfile.value = updatedProfile
+                repository.saveUserProfile(updatedProfile)
+            } catch (e: Exception) {
+                Log.e("CricketViewModel", "Auto-save error: ${e.message}")
+            } finally {
+                _isAutoSaving.value = false
+            }
+        }
+    }
+
+    fun exportAllApplicationDataJson(): String {
+        val rootObj = JSONObject()
+        rootObj.put("storageType", "CricLive Complete Local Backup")
+        rootObj.put("exportTime", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
+        rootObj.put("scorerName", _userProfile.value.displayName)
+        rootObj.put("scorerRole", _userProfile.value.role)
+        rootObj.put("totalMatches", _matches.value.size)
+        rootObj.put("totalCustomTeams", _customTeams.value.size)
+
+        val matchesArr = JSONArray()
+        _matches.value.forEach { m ->
+            matchesArr.put(JSONObject(serializeMatchToJson(m)))
+        }
+        rootObj.put("matches", matchesArr)
+
+        val teamsArr = JSONArray()
+        _customTeams.value.forEach { t ->
+            val tObj = JSONObject()
+            tObj.put("id", t.id)
+            tObj.put("name", t.name)
+            tObj.put("shortCode", t.shortCode)
+            tObj.put("colorHex", t.colorHex)
+            val pArr = JSONArray()
+            t.players.forEach { p ->
+                val pObj = JSONObject()
+                pObj.put("id", p.id)
+                pObj.put("name", p.name)
+                pObj.put("role", p.role.name)
+                pObj.put("battingStyle", p.battingStyle.name)
+                pObj.put("bowlingStyle", p.bowlingStyle.name)
+                pObj.put("isCaptain", p.isCaptain)
+                pObj.put("isWicketKeeper", p.isWicketKeeper)
+                pArr.put(pObj)
+            }
+            tObj.put("players", pArr)
+            teamsArr.put(tObj)
+        }
+        rootObj.put("customTeams", teamsArr)
+
+        return rootObj.toString(2)
+    }
+
+    fun restoreAllApplicationDataJson(jsonString: String): Result<String> {
+        return try {
+            val root = JSONObject(jsonString)
+            var restoredMatchesCount = 0
+            var restoredTeamsCount = 0
+
+            if (root.has("customTeams")) {
+                val teamsArr = root.getJSONArray("customTeams")
+                val restoredTeams = mutableListOf<Team>()
+                for (i in 0 until teamsArr.length()) {
+                    val tObj = teamsArr.getJSONObject(i)
+                    val pArr = tObj.optJSONArray("players") ?: JSONArray()
+                    val players = mutableListOf<Player>()
+                    for (j in 0 until pArr.length()) {
+                        val pObj = pArr.getJSONObject(j)
+                        players.add(
+                            Player(
+                                id = pObj.optString("id", UUID.randomUUID().toString()),
+                                name = pObj.optString("name", "Player"),
+                                role = PlayerRole.values().find { it.name == pObj.optString("role") } ?: PlayerRole.BATSMAN,
+                                battingStyle = BattingStyle.values().find { it.name == pObj.optString("battingStyle") } ?: BattingStyle.RIGHT_HAND,
+                                bowlingStyle = BowlingStyle.values().find { it.name == pObj.optString("bowlingStyle") } ?: BowlingStyle.RIGHT_ARM_MEDIUM,
+                                isCaptain = pObj.optBoolean("isCaptain", false),
+                                isWicketKeeper = pObj.optBoolean("isWicketKeeper", false)
+                            )
+                        )
+                    }
+                    restoredTeams.add(
+                        Team(
+                            id = tObj.optString("id", UUID.randomUUID().toString()),
+                            name = tObj.optString("name", "Team"),
+                            shortCode = tObj.optString("shortCode", "TM"),
+                            colorHex = tObj.optLong("colorHex", 0xFF1976D2),
+                            isCustom = true,
+                            players = players
+                        )
+                    )
+                }
+                if (restoredTeams.isNotEmpty()) {
+                    _customTeams.value = restoredTeams
+                    repository.saveCustomTeams(restoredTeams)
+                    restoredTeamsCount = restoredTeams.size
+                }
+            }
+
+            if (root.has("matches")) {
+                val matchesArr = root.getJSONArray("matches")
+                val restoredMatches = mutableListOf<CricketMatch>()
+                for (i in 0 until matchesArr.length()) {
+                    val mObj = matchesArr.getJSONObject(i)
+                    deserializeMatchFromJson(mObj.toString())?.let {
+                        restoredMatches.add(it)
+                    }
+                }
+                if (restoredMatches.isNotEmpty()) {
+                    _matches.value = restoredMatches
+                    repository.saveMatches(restoredMatches)
+                    _activeMatch.value = restoredMatches.firstOrNull()
+                    restoredMatchesCount = restoredMatches.size
+                }
+            }
+
+            triggerAutoSaveToLocalStorage(forceImmediate = true)
+            val msg = "Restored $restoredMatchesCount match(es) and $restoredTeamsCount team(s) from backup"
+            _statusMessage.value = msg
+            Result.success(msg)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun getLocalStorageInfo(): LocalStorageInfo {
+        val matches = _matches.value
+        val teams = _customTeams.value
+        var totalBalls = 0
+        matches.forEach { m ->
+            m.innings.forEach { inn ->
+                totalBalls += inn.legalBalls
+            }
+        }
+        val file = repository.getLocalBackupFile()
+        val sizeKb = if (file.exists()) (file.length() / 1024).toInt().coerceAtLeast(1) else (matches.size * 12 + teams.size * 4).coerceAtLeast(8)
+        return LocalStorageInfo(
+            totalMatches = matches.size,
+            totalTeams = teams.size,
+            totalDeliveries = totalBalls,
+            estimatedSizeKb = sizeKb,
+            lastSaveTime = _userProfile.value.lastAutoSaveTime,
+            isAutoSaveEnabled = _userProfile.value.autoSaveEnabled
+        )
     }
 
     fun restoreFromBackup(backup: BackupItem) {
@@ -727,7 +1137,8 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
                 _activeMatch.value = restored
                 undoStack.clear()
                 _canUndo.value = false
-                _statusMessage.value = "Restored match session from cloud backup"
+                _statusMessage.value = "Restored match session"
+                triggerAutoSaveToLocalStorage()
             }
         } catch (e: Exception) {
             _statusMessage.value = "Failed to restore backup"
@@ -738,7 +1149,6 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
         val list = _backups.value.filter { it.id != backupId }
         _backups.value = list
         repository.saveBackups(list)
-        _statusMessage.value = "Cloud backup deleted"
     }
 
     // --- PDF Scorecard Download & Sharing ---
@@ -766,6 +1176,8 @@ class CricketViewModel(application: Application) : AndroidViewModel(application)
             list.add(0, updated)
         }
         _matches.value = list
+        repository.saveMatches(list)
+        triggerAutoSaveToLocalStorage()
     }
 
     private fun defaultCommentary(runs: Int, extraType: ExtraType, isWicket: Boolean, dismissal: Dismissal?): String {

@@ -5,10 +5,11 @@ import android.content.SharedPreferences
 import com.example.model.*
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
-class CricketRepository(context: Context) {
+class CricketRepository(private val context: Context) {
 
     private val prefs: SharedPreferences = context.getSharedPreferences("criclive_storage", Context.MODE_PRIVATE)
 
@@ -95,14 +96,25 @@ class CricketRepository(context: Context) {
             .apply()
     }
 
-    // User Profile (Google Account)
+    // User Profile (Local Storage Profile)
     fun loadUserProfile(): UserProfile {
+        val email = prefs.getString("user_email", "rehman.shaikh4@gmail.com") ?: "rehman.shaikh4@gmail.com"
+        val rawName = prefs.getString("user_name", "Rehman Shaikh") ?: "Rehman Shaikh"
+        val cleanName = rawName.replace("(Lead Scorer)", "").replace("Official Match Umpire", "").replace("Club Admin", "").trim().ifBlank { "Rehman Shaikh" }
+        val role = prefs.getString("user_role", "Lead Scorer & Match Official") ?: "Lead Scorer & Match Official"
+        val initials = cleanName.split(" ").mapNotNull { it.firstOrNull()?.uppercase() }.take(2).joinToString("").ifBlank { "RS" }
+
         return UserProfile(
-            id = prefs.getString("user_id", "user_google_1") ?: "user_google_1",
-            displayName = prefs.getString("user_name", "Rehman Shaikh (Lead Scorer)") ?: "Rehman Shaikh (Lead Scorer)",
-            email = prefs.getString("user_email", "rehman.shaikh4@gmail.com") ?: "rehman.shaikh4@gmail.com",
-            photoInitials = prefs.getString("user_initials", "RS") ?: "RS",
-            isGoogleUser = prefs.getBoolean("user_is_google", true)
+            id = prefs.getString("user_id", "local_user_1") ?: "local_user_1",
+            displayName = cleanName,
+            role = role,
+            email = email,
+            photoInitials = initials,
+            autoSaveEnabled = prefs.getBoolean("user_auto_save_enabled", true),
+            lastAutoSaveTime = prefs.getString("user_last_auto_save", "Never") ?: "Never",
+            totalSavedMatches = prefs.getInt("user_total_saved_matches", 0),
+            localStorageLocation = "Internal App Storage",
+            storageStatusDescription = prefs.getString("user_storage_status_desc", "Auto-save to local storage active") ?: "Auto-save to local storage active"
         )
     }
 
@@ -110,10 +122,50 @@ class CricketRepository(context: Context) {
         prefs.edit()
             .putString("user_id", profile.id)
             .putString("user_name", profile.displayName)
+            .putString("user_role", profile.role)
             .putString("user_email", profile.email)
             .putString("user_initials", profile.photoInitials)
-            .putBoolean("user_is_google", profile.isGoogleUser)
+            .putBoolean("user_auto_save_enabled", profile.autoSaveEnabled)
+            .putString("user_last_auto_save", profile.lastAutoSaveTime)
+            .putInt("user_total_saved_matches", profile.totalSavedMatches)
+            .putString("user_storage_status_desc", profile.storageStatusDescription)
             .apply()
+    }
+
+    // Auto-save full application state to Local Storage
+    fun saveAllAppDataToLocalStorage(payloadJson: String): Boolean {
+        return try {
+            prefs.edit()
+                .putString("local_storage_all_app_payload", payloadJson)
+                .putLong("local_storage_last_save_timestamp", System.currentTimeMillis())
+                .apply()
+
+            // Also persist to a dedicated JSON file in context.filesDir
+            val backupDir = File(context.filesDir, "criclive_data")
+            if (!backupDir.exists()) backupDir.mkdirs()
+            val backupFile = File(backupDir, "app_local_backup.json")
+            backupFile.writeText(payloadJson)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun loadAllAppDataFromLocalStorage(): String? {
+        val fromPrefs = prefs.getString("local_storage_all_app_payload", null)
+        if (fromPrefs != null) return fromPrefs
+        return try {
+            val backupFile = File(File(context.filesDir, "criclive_data"), "app_local_backup.json")
+            if (backupFile.exists()) backupFile.readText() else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun getLocalBackupFile(): File {
+        val backupDir = File(context.filesDir, "criclive_data")
+        if (!backupDir.exists()) backupDir.mkdirs()
+        return File(backupDir, "app_local_backup.json")
     }
 
     // Backups
@@ -158,6 +210,472 @@ class CricketRepository(context: Context) {
         prefs.edit().putString("cloud_backups", arr.toString()).apply()
     }
 
+    // Matches Persistence across App Restarts
+    fun loadMatches(): List<CricketMatch> {
+        val jsonStr = prefs.getString("saved_matches_v2", null)
+        if (jsonStr.isNullOrBlank()) {
+            val presets = getPresetMatches()
+            saveMatches(presets)
+            return presets
+        }
+        return try {
+            val matches = parseMatchesJson(jsonStr)
+            if (matches.isNotEmpty()) matches else {
+                val presets = getPresetMatches()
+                saveMatches(presets)
+                presets
+            }
+        } catch (e: Exception) {
+            val presets = getPresetMatches()
+            saveMatches(presets)
+            presets
+        }
+    }
+
+    fun saveMatches(matches: List<CricketMatch>) {
+        try {
+            val jsonStr = serializeMatchesToJson(matches)
+            prefs.edit().putString("saved_matches_v2", jsonStr).apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun serializeMatchesToJson(matches: List<CricketMatch>): String {
+        val rootArr = JSONArray()
+        matches.forEach { m ->
+            val mObj = JSONObject()
+            mObj.put("id", m.id)
+            mObj.put("title", m.title)
+            mObj.put("tournament", m.tournament)
+            mObj.put("venue", m.venue)
+            mObj.put("date", m.date)
+            mObj.put("oversLimit", m.oversLimit)
+            mObj.put("matchType", m.matchType.name)
+            mObj.put("pitchCondition", m.pitchCondition)
+            mObj.put("tossWinnerId", m.tossWinnerId)
+            mObj.put("tossDecision", m.tossDecision.name)
+            mObj.put("status", m.status.name)
+            mObj.put("currentInningsIndex", m.currentInningsIndex)
+            mObj.put("resultText", m.resultText)
+
+            // Team A
+            mObj.put("teamA", serializeTeamToObj(m.teamA))
+            // Team B
+            mObj.put("teamB", serializeTeamToObj(m.teamB))
+
+            // Innings
+            val innArr = JSONArray()
+            m.innings.forEach { inn ->
+                val innObj = JSONObject()
+                innObj.put("id", inn.id)
+                innObj.put("battingTeamId", inn.battingTeamId)
+                innObj.put("bowlingTeamId", inn.bowlingTeamId)
+                innObj.put("totalRuns", inn.totalRuns)
+                innObj.put("wickets", inn.wickets)
+                innObj.put("legalBalls", inn.legalBalls)
+                innObj.put("strikerId", inn.strikerId)
+                innObj.put("nonStrikerId", inn.nonStrikerId)
+                innObj.put("currentBowlerId", inn.currentBowlerId)
+                innObj.put("lastOverBowlerId", inn.lastOverBowlerId)
+                innObj.put("isWaitingForNewBowler", inn.isWaitingForNewBowler)
+                innObj.put("isCompleted", inn.isCompleted)
+
+                // Extras
+                val extObj = JSONObject()
+                extObj.put("wides", inn.extras.wides)
+                extObj.put("noBalls", inn.extras.noBalls)
+                extObj.put("byes", inn.extras.byes)
+                extObj.put("legByes", inn.extras.legByes)
+                extObj.put("penalty", inn.extras.penalty)
+                innObj.put("extras", extObj)
+
+                // Batting Stats
+                val batArr = JSONArray()
+                inn.battingStats.forEach { bs ->
+                    val bsObj = JSONObject()
+                    bsObj.put("playerId", bs.playerId)
+                    bsObj.put("runs", bs.runs)
+                    bsObj.put("balls", bs.balls)
+                    bsObj.put("fours", bs.fours)
+                    bsObj.put("sixes", bs.sixes)
+                    bsObj.put("isOut", bs.isOut)
+                    bs.dismissal?.let { d ->
+                        val dObj = JSONObject()
+                        dObj.put("type", d.type.name)
+                        dObj.put("outPlayerId", d.outPlayerId)
+                        d.bowlerId?.let { dObj.put("bowlerId", it) }
+                        d.fielderName?.let { dObj.put("fielderName", it) }
+                        bsObj.put("dismissal", dObj)
+                    }
+                    batArr.put(bsObj)
+                }
+                innObj.put("battingStats", batArr)
+
+                // Bowling Stats
+                val bowlArr = JSONArray()
+                inn.bowlingStats.forEach { bws ->
+                    val bwsObj = JSONObject()
+                    bwsObj.put("playerId", bws.playerId)
+                    bwsObj.put("legalBalls", bws.legalBalls)
+                    bwsObj.put("maidens", bws.maidens)
+                    bwsObj.put("runsConceded", bws.runsConceded)
+                    bwsObj.put("wickets", bws.wickets)
+                    bwsObj.put("wides", bws.wides)
+                    bwsObj.put("noBalls", bws.noBalls)
+                    bowlArr.put(bwsObj)
+                }
+                innObj.put("bowlingStats", bowlArr)
+
+                // Deliveries
+                val delArr = JSONArray()
+                inn.deliveries.forEach { del ->
+                    val dObj = JSONObject()
+                    dObj.put("id", del.id)
+                    dObj.put("overNumber", del.overNumber)
+                    dObj.put("ballNumberInOver", del.ballNumberInOver)
+                    dObj.put("bowlerId", del.bowlerId)
+                    dObj.put("strikerId", del.strikerId)
+                    dObj.put("nonStrikerId", del.nonStrikerId)
+                    dObj.put("runsBat", del.runsBat)
+                    dObj.put("extraType", del.extraType.name)
+                    dObj.put("extraRuns", del.extraRuns)
+                    dObj.put("isWicket", del.isWicket)
+                    dObj.put("commentary", del.commentary)
+                    dObj.put("isFreeHit", del.isFreeHit)
+                    dObj.put("timestamp", del.timestamp)
+                    del.dismissal?.let { dm ->
+                        val dmObj = JSONObject()
+                        dmObj.put("type", dm.type.name)
+                        dmObj.put("outPlayerId", dm.outPlayerId)
+                        dm.bowlerId?.let { dmObj.put("bowlerId", it) }
+                        dm.fielderName?.let { dmObj.put("fielderName", it) }
+                        dObj.put("dismissal", dmObj)
+                    }
+                    delArr.put(dObj)
+                }
+                innObj.put("deliveries", delArr)
+
+                // Fall of wickets
+                val fowArr = JSONArray()
+                inn.fallOfWickets.forEach { f ->
+                    val fObj = JSONObject()
+                    fObj.put("wicketNumber", f.wicketNumber)
+                    fObj.put("score", f.score)
+                    fObj.put("overBall", f.overBall)
+                    fObj.put("playerId", f.playerId)
+                    fowArr.put(fObj)
+                }
+                innObj.put("fallOfWickets", fowArr)
+
+                innArr.put(innObj)
+            }
+            mObj.put("innings", innArr)
+            rootArr.put(mObj)
+        }
+        return rootArr.toString()
+    }
+
+    private fun serializeTeamToObj(team: Team): JSONObject {
+        val tObj = JSONObject()
+        tObj.put("id", team.id)
+        tObj.put("name", team.name)
+        tObj.put("shortCode", team.shortCode)
+        tObj.put("colorHex", team.colorHex)
+        tObj.put("isCustom", team.isCustom)
+        val pArray = JSONArray()
+        team.players.forEach { p ->
+            val pObj = JSONObject()
+            pObj.put("id", p.id)
+            pObj.put("name", p.name)
+            pObj.put("role", p.role.name)
+            pObj.put("battingStyle", p.battingStyle.name)
+            pObj.put("bowlingStyle", p.bowlingStyle.name)
+            pObj.put("isCaptain", p.isCaptain)
+            pObj.put("isWicketKeeper", p.isWicketKeeper)
+            pObj.put("jerseyNumber", p.jerseyNumber)
+            pArray.put(pObj)
+        }
+        tObj.put("players", pArray)
+        return tObj
+    }
+
+    fun parseMatchesJson(jsonStr: String): List<CricketMatch> {
+        val rootArr = JSONArray(jsonStr)
+        val matches = mutableListOf<CricketMatch>()
+        for (i in 0 until rootArr.length()) {
+            val mObj = rootArr.getJSONObject(i)
+            val teamA = parseTeamFromObj(mObj.getJSONObject("teamA"))
+            val teamB = parseTeamFromObj(mObj.getJSONObject("teamB"))
+
+            val innList = mutableListOf<Innings>()
+            val innArr = mObj.optJSONArray("innings")
+            if (innArr != null) {
+                for (k in 0 until innArr.length()) {
+                    val innObj = innArr.getJSONObject(k)
+                    val extObj = innObj.optJSONObject("extras")
+                    val extras = if (extObj != null) {
+                        ExtrasBreakdown(
+                            wides = extObj.optInt("wides", 0),
+                            noBalls = extObj.optInt("noBalls", 0),
+                            byes = extObj.optInt("byes", 0),
+                            legByes = extObj.optInt("legByes", 0),
+                            penalty = extObj.optInt("penalty", 0)
+                        )
+                    } else ExtrasBreakdown()
+
+                    val batList = mutableListOf<BattingStat>()
+                    val batArr = innObj.optJSONArray("battingStats")
+                    if (batArr != null) {
+                        for (b in 0 until batArr.length()) {
+                            val bsObj = batArr.getJSONObject(b)
+                            val disObj = bsObj.optJSONObject("dismissal")
+                            val dis = if (disObj != null) {
+                                Dismissal(
+                                    type = try { WicketType.valueOf(disObj.getString("type")) } catch (_: Exception) { WicketType.BOWLED },
+                                    outPlayerId = disObj.getString("outPlayerId"),
+                                    bowlerId = disObj.optString("bowlerId").takeIf { it.isNotBlank() },
+                                    fielderName = disObj.optString("fielderName").takeIf { it.isNotBlank() }
+                                )
+                            } else null
+                            batList.add(
+                                BattingStat(
+                                    playerId = bsObj.getString("playerId"),
+                                    runs = bsObj.optInt("runs", 0),
+                                    balls = bsObj.optInt("balls", 0),
+                                    fours = bsObj.optInt("fours", 0),
+                                    sixes = bsObj.optInt("sixes", 0),
+                                    isOut = bsObj.optBoolean("isOut", false),
+                                    dismissal = dis
+                                )
+                            )
+                        }
+                    }
+
+                    val bowlList = mutableListOf<BowlingStat>()
+                    val bowlArr = innObj.optJSONArray("bowlingStats")
+                    if (bowlArr != null) {
+                        for (bw in 0 until bowlArr.length()) {
+                            val bwObj = bowlArr.getJSONObject(bw)
+                            bowlList.add(
+                                BowlingStat(
+                                    playerId = bwObj.getString("playerId"),
+                                    legalBalls = bwObj.optInt("legalBalls", 0),
+                                    maidens = bwObj.optInt("maidens", 0),
+                                    runsConceded = bwObj.optInt("runsConceded", 0),
+                                    wickets = bwObj.optInt("wickets", 0),
+                                    wides = bwObj.optInt("wides", 0),
+                                    noBalls = bwObj.optInt("noBalls", 0)
+                                )
+                            )
+                        }
+                    }
+
+                    val delList = mutableListOf<BallDelivery>()
+                    val delArr = innObj.optJSONArray("deliveries")
+                    if (delArr != null) {
+                        for (d in 0 until delArr.length()) {
+                            val dObj = delArr.getJSONObject(d)
+                            val dmObj = dObj.optJSONObject("dismissal")
+                            val dm = if (dmObj != null) {
+                                Dismissal(
+                                    type = try { WicketType.valueOf(dmObj.getString("type")) } catch (_: Exception) { WicketType.BOWLED },
+                                    outPlayerId = dmObj.getString("outPlayerId"),
+                                    bowlerId = dmObj.optString("bowlerId").takeIf { it.isNotBlank() },
+                                    fielderName = dmObj.optString("fielderName").takeIf { it.isNotBlank() }
+                                )
+                            } else null
+                            delList.add(
+                                BallDelivery(
+                                    id = dObj.optString("id", UUID.randomUUID().toString()),
+                                    overNumber = dObj.optInt("overNumber", 0),
+                                    ballNumberInOver = dObj.optInt("ballNumberInOver", 1),
+                                    bowlerId = dObj.optString("bowlerId", ""),
+                                    strikerId = dObj.optString("strikerId", ""),
+                                    nonStrikerId = dObj.optString("nonStrikerId", ""),
+                                    runsBat = dObj.optInt("runsBat", 0),
+                                    extraType = try { ExtraType.valueOf(dObj.optString("extraType", ExtraType.NONE.name)) } catch (_: Exception) { ExtraType.NONE },
+                                    extraRuns = dObj.optInt("extraRuns", 0),
+                                    isWicket = dObj.optBoolean("isWicket", false),
+                                    dismissal = dm,
+                                    commentary = dObj.optString("commentary", ""),
+                                    isFreeHit = dObj.optBoolean("isFreeHit", false),
+                                    timestamp = dObj.optLong("timestamp", System.currentTimeMillis())
+                                )
+                            )
+                        }
+                    }
+
+                    val fowList = mutableListOf<FallOfWicket>()
+                    val fowArr = innObj.optJSONArray("fallOfWickets")
+                    if (fowArr != null) {
+                        for (f in 0 until fowArr.length()) {
+                            val fObj = fowArr.getJSONObject(f)
+                            fowList.add(
+                                FallOfWicket(
+                                    wicketNumber = fObj.getInt("wicketNumber"),
+                                    score = fObj.getInt("score"),
+                                    overBall = fObj.getString("overBall"),
+                                    playerId = fObj.getString("playerId")
+                                )
+                            )
+                        }
+                    }
+
+                    innList.add(
+                        Innings(
+                            id = innObj.optString("id", UUID.randomUUID().toString()),
+                            battingTeamId = innObj.optString("battingTeamId", teamA.id),
+                            bowlingTeamId = innObj.optString("bowlingTeamId", teamB.id),
+                            totalRuns = innObj.optInt("totalRuns", 0),
+                            wickets = innObj.optInt("wickets", 0),
+                            legalBalls = innObj.optInt("legalBalls", 0),
+                            extras = extras,
+                            strikerId = innObj.optString("strikerId", ""),
+                            nonStrikerId = innObj.optString("nonStrikerId", ""),
+                            currentBowlerId = innObj.optString("currentBowlerId", ""),
+                            lastOverBowlerId = innObj.optString("lastOverBowlerId", ""),
+                            isWaitingForNewBowler = innObj.optBoolean("isWaitingForNewBowler", false),
+                            battingStats = batList,
+                            bowlingStats = bowlList,
+                            deliveries = delList,
+                            fallOfWickets = fowList,
+                            isCompleted = innObj.optBoolean("isCompleted", false)
+                        )
+                    )
+                }
+            }
+
+            matches.add(
+                CricketMatch(
+                    id = mObj.getString("id"),
+                    title = mObj.getString("title"),
+                    tournament = mObj.optString("tournament", "Championship"),
+                    venue = mObj.optString("venue", "Stadium"),
+                    date = mObj.optString("date", "Today"),
+                    teamA = teamA,
+                    teamB = teamB,
+                    oversLimit = mObj.optInt("oversLimit", 20),
+                    matchType = try { MatchType.valueOf(mObj.optString("matchType", MatchType.T20.name)) } catch (_: Exception) { MatchType.T20 },
+                    pitchCondition = mObj.optString("pitchCondition", "Dry Pitch"),
+                    tossWinnerId = mObj.optString("tossWinnerId", ""),
+                    tossDecision = try { TossDecision.valueOf(mObj.optString("tossDecision", TossDecision.BAT.name)) } catch (_: Exception) { TossDecision.BAT },
+                    status = try { MatchStatus.valueOf(mObj.optString("status", MatchStatus.LIVE.name)) } catch (_: Exception) { MatchStatus.LIVE },
+                    innings = innList,
+                    currentInningsIndex = mObj.optInt("currentInningsIndex", 0),
+                    resultText = mObj.optString("resultText", "")
+                )
+            )
+        }
+        return matches
+    }
+
+    private fun parsePlayerRole(rawRole: String?, rawName: String = "", isWkFlag: Boolean = false, bowlingStyle: BowlingStyle = BowlingStyle.NONE, squadIndex: Int = 0): PlayerRole {
+        if (isWkFlag) return PlayerRole.WICKET_KEEPER
+        val nameLower = rawName.lowercase()
+        if (nameLower.contains("(wk)") || nameLower.contains("[wk]") || nameLower.contains("wicketkeeper") || nameLower.contains("wicket-keeper") || nameLower.contains("wicket keeper") || nameLower.contains("(keeper)")) {
+            return PlayerRole.WICKET_KEEPER
+        }
+        if (nameLower.contains("(bowler)") || nameLower.contains("(bowl)") || nameLower.contains("[bowler]") || nameLower.contains("(bowl)")) {
+            return PlayerRole.BOWLER
+        }
+        if (nameLower.contains("(all-rounder)") || nameLower.contains("(allrounder)") || nameLower.contains("(ar)") || nameLower.contains("(all rounder)")) {
+            return PlayerRole.ALL_ROUNDER
+        }
+        if (nameLower.contains("(batsman)") || nameLower.contains("(bat)")) {
+            return PlayerRole.BATSMAN
+        }
+
+        val str = (rawRole ?: "").trim().lowercase()
+        if (str.isNotBlank()) {
+            when {
+                str.contains("wicket") || str.contains("wk") || str == "keeper" || str == "wkeeper" -> return PlayerRole.WICKET_KEEPER
+                str.contains("all_rounder") || str.contains("all-rounder") || str.contains("allrounder") || str.contains("all rounder") || str == "ar" -> return PlayerRole.ALL_ROUNDER
+                str.contains("bowler") || str.contains("bowl") || str.contains("paceman") || str.contains("spinner") || str.contains("fast") || str.contains("seamer") -> return PlayerRole.BOWLER
+                str.contains("batsman") || str.contains("batter") || str.contains("bat") || str.contains("opening") || str.contains("middle order") -> return PlayerRole.BATSMAN
+            }
+        }
+
+        if (bowlingStyle != BowlingStyle.NONE) {
+            return PlayerRole.BOWLER
+        }
+
+        // Default balance for raw string lists (0-3 batsman, 4-6 all-rounder, 7+ bowler)
+        if (rawRole.isNullOrBlank()) {
+            return when {
+                squadIndex >= 6 -> PlayerRole.BOWLER
+                squadIndex in 4..5 -> PlayerRole.ALL_ROUNDER
+                else -> PlayerRole.BATSMAN
+            }
+        }
+
+        return PlayerRole.BATSMAN
+    }
+
+    private fun parseBattingStyle(rawStyle: String?): BattingStyle {
+        val str = (rawStyle ?: "").trim().lowercase()
+        return if (str.contains("left") || str == "lhb" || str == "l") BattingStyle.LEFT_HAND else BattingStyle.RIGHT_HAND
+    }
+
+    private fun parseBowlingStyle(rawStyle: String?, role: PlayerRole = PlayerRole.BATSMAN): BowlingStyle {
+        val str = (rawStyle ?: "").trim().lowercase()
+        return when {
+            str.contains("left") && (str.contains("fast") || str.contains("pace") || str.contains("medium")) -> BowlingStyle.LEFT_ARM_FAST
+            str.contains("left") && (str.contains("spin") || str.contains("orthodox") || str.contains("chinaman")) -> BowlingStyle.LEFT_ARM_SPIN
+            str.contains("right") && (str.contains("fast") || str.contains("pace") || str.contains("express")) -> BowlingStyle.RIGHT_ARM_FAST
+            str.contains("right") && (str.contains("medium") || str.contains("seam")) -> BowlingStyle.RIGHT_ARM_MEDIUM
+            str.contains("right") && (str.contains("spin") || str.contains("off") || str.contains("leg")) -> BowlingStyle.RIGHT_ARM_SPIN
+            str.contains("fast") || str.contains("pace") -> BowlingStyle.RIGHT_ARM_FAST
+            str.contains("medium") -> BowlingStyle.RIGHT_ARM_MEDIUM
+            str.contains("spin") -> BowlingStyle.RIGHT_ARM_SPIN
+            role == PlayerRole.BOWLER -> BowlingStyle.RIGHT_ARM_FAST
+            role == PlayerRole.ALL_ROUNDER -> BowlingStyle.RIGHT_ARM_MEDIUM
+            else -> BowlingStyle.NONE
+        }
+    }
+
+    private fun parseTeamFromObj(tObj: JSONObject): Team {
+        val pArr = tObj.optJSONArray("players")
+        val players = mutableListOf<Player>()
+        if (pArr != null) {
+            for (j in 0 until pArr.length()) {
+                val pItem = pArr.get(j)
+                if (pItem is JSONObject) {
+                    val rawRole = pItem.optString("role", "").ifBlank { pItem.optString("player_role", "").ifBlank { pItem.optString("type", "") } }
+                    val rawName = pItem.optString("name", "").ifBlank { pItem.optString("playerName", "Player ${j + 1}") }
+                    val rawBat = pItem.optString("battingStyle", "").ifBlank { pItem.optString("batting", "") }
+                    val rawBowl = pItem.optString("bowlingStyle", "").ifBlank { pItem.optString("bowling", "") }
+                    val isCaptain = pItem.optBoolean("isCaptain", false) || pItem.optBoolean("captain", false) || rawName.lowercase().contains("(c)")
+                    val isWk = pItem.optBoolean("isWicketKeeper", false) || pItem.optBoolean("isWk", false) || pItem.optBoolean("wicketkeeper", false) || rawName.lowercase().contains("(wk)")
+
+                    val bStyle = parseBattingStyle(rawBat)
+                    val bwStyle = parseBowlingStyle(rawBowl)
+                    val role = parsePlayerRole(rawRole, rawName, isWk, bwStyle, j)
+
+                    players.add(
+                        Player(
+                            id = pItem.optString("id", UUID.randomUUID().toString()),
+                            name = rawName,
+                            role = role,
+                            battingStyle = bStyle,
+                            bowlingStyle = if (role == PlayerRole.BATSMAN && bwStyle == BowlingStyle.NONE) BowlingStyle.NONE else if (bwStyle == BowlingStyle.NONE && (role == PlayerRole.BOWLER || role == PlayerRole.ALL_ROUNDER)) parseBowlingStyle("", role) else bwStyle,
+                            isCaptain = isCaptain,
+                            isWicketKeeper = isWk || role == PlayerRole.WICKET_KEEPER,
+                            jerseyNumber = pItem.optInt("jerseyNumber", pItem.optInt("jersey_number", j + 1))
+                        )
+                    )
+                }
+            }
+        }
+        return Team(
+            id = tObj.optString("id", UUID.randomUUID().toString()),
+            name = tObj.optString("name", "Team"),
+            shortCode = tObj.optString("shortCode", "TEA"),
+            colorHex = tObj.optLong("colorHex", 0xFF1B5E20),
+            players = players,
+            isCustom = tObj.optBoolean("isCustom", false)
+        )
+    }
+
     fun parseTeamsJson(jsonStr: String): List<Team> {
         val trimmed = jsonStr.trim()
         val arr = if (trimmed.startsWith("{")) {
@@ -181,23 +699,44 @@ class CricketRepository(context: Context) {
                 for (j in 0 until pArr.length()) {
                     val pItem = pArr.get(j)
                     if (pItem is JSONObject) {
+                        val rawRole = pItem.optString("role", "").ifBlank { pItem.optString("player_role", "").ifBlank { pItem.optString("type", "") } }
+                        val rawName = pItem.optString("name", "").ifBlank { pItem.optString("playerName", "Player ${j + 1}") }
+                        val rawBat = pItem.optString("battingStyle", "").ifBlank { pItem.optString("batting", "") }
+                        val rawBowl = pItem.optString("bowlingStyle", "").ifBlank { pItem.optString("bowling", "") }
+                        val isCaptain = pItem.optBoolean("isCaptain", false) || pItem.optBoolean("captain", false) || rawName.lowercase().contains("(c)")
+                        val isWk = pItem.optBoolean("isWicketKeeper", false) || pItem.optBoolean("isWk", false) || pItem.optBoolean("wicketkeeper", false) || rawName.lowercase().contains("(wk)")
+
+                        val bStyle = parseBattingStyle(rawBat)
+                        val bwStyle = parseBowlingStyle(rawBowl)
+                        val role = parsePlayerRole(rawRole, rawName, isWk, bwStyle, j)
+
                         players.add(
                             Player(
                                 id = pItem.optString("id", UUID.randomUUID().toString()),
-                                name = pItem.optString("name", "Player ${j + 1}"),
-                                role = try { PlayerRole.valueOf(pItem.optString("role", PlayerRole.BATSMAN.name)) } catch (_: Exception) { PlayerRole.BATSMAN },
-                                battingStyle = try { BattingStyle.valueOf(pItem.optString("battingStyle", BattingStyle.RIGHT_HAND.name)) } catch (_: Exception) { BattingStyle.RIGHT_HAND },
-                                bowlingStyle = try { BowlingStyle.valueOf(pItem.optString("bowlingStyle", BowlingStyle.NONE.name)) } catch (_: Exception) { BowlingStyle.NONE },
-                                isCaptain = pItem.optBoolean("isCaptain", false),
-                                isWicketKeeper = pItem.optBoolean("isWicketKeeper", false),
-                                jerseyNumber = pItem.optInt("jerseyNumber", j + 1)
+                                name = rawName,
+                                role = role,
+                                battingStyle = bStyle,
+                                bowlingStyle = if (role == PlayerRole.BATSMAN && bwStyle == BowlingStyle.NONE) BowlingStyle.NONE else if (bwStyle == BowlingStyle.NONE && (role == PlayerRole.BOWLER || role == PlayerRole.ALL_ROUNDER)) parseBowlingStyle("", role) else bwStyle,
+                                isCaptain = isCaptain,
+                                isWicketKeeper = isWk || role == PlayerRole.WICKET_KEEPER,
+                                jerseyNumber = pItem.optInt("jerseyNumber", pItem.optInt("jersey_number", j + 1))
                             )
                         )
                     } else if (pItem is String && pItem.isNotBlank()) {
+                        val nameStr = pItem.trim()
+                        val isCaptain = nameStr.lowercase().contains("(c)")
+                        val isWk = nameStr.lowercase().contains("(wk)")
+                        val role = parsePlayerRole(null, nameStr, isWk, BowlingStyle.NONE, j)
+                        val bwStyle = if (role == PlayerRole.BOWLER) BowlingStyle.RIGHT_ARM_FAST else if (role == PlayerRole.ALL_ROUNDER) BowlingStyle.RIGHT_ARM_MEDIUM else BowlingStyle.NONE
                         players.add(
                             Player(
                                 id = UUID.randomUUID().toString(),
-                                name = pItem.trim(),
+                                name = nameStr,
+                                role = role,
+                                battingStyle = BattingStyle.RIGHT_HAND,
+                                bowlingStyle = bwStyle,
+                                isCaptain = isCaptain,
+                                isWicketKeeper = isWk || role == PlayerRole.WICKET_KEEPER,
                                 jerseyNumber = j + 1
                             )
                         )

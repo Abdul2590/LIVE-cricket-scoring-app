@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -37,6 +38,7 @@ fun LiveScoringScreen(
     val canUndo by viewModel.canUndo.collectAsState()
 
     var showChangeBatsmanDialog by remember { mutableStateOf(false) }
+    var showSelectBowlerDialog by remember { mutableStateOf(false) }
     var showWicketDialog by remember { mutableStateOf(false) }
     var showNoBallDialog by remember { mutableStateOf(false) }
     var editingPlayerTarget by remember { mutableStateOf<Pair<String, Player>?>(null) } // teamId to Player
@@ -53,6 +55,16 @@ fun LiveScoringScreen(
     }
 
     val inn = match.currentInnings
+    val isWaitingForBowler = inn?.isWaitingForNewBowler == true || (inn != null && inn.currentBowlerId.isBlank() && !inn.isCompleted)
+    val currentOverNumber = (inn?.legalBalls ?: 0) / 6 + 1
+
+    // Automatically trigger bowler selection modal on over completion
+    LaunchedEffect(inn?.isWaitingForNewBowler, inn?.legalBalls) {
+        if (inn != null && inn.isWaitingForNewBowler && !inn.isCompleted) {
+            showSelectBowlerDialog = true
+        }
+    }
+
     val battingTeam = match.battingTeam
     val bowlingTeam = match.bowlingTeam
     val striker = battingTeam.players.find { it.id == inn?.strikerId }
@@ -92,18 +104,21 @@ fun LiveScoringScreen(
                 striker = striker,
                 nonStriker = nonStriker,
                 bowler = bowler,
+                isWaitingForBowler = isWaitingForBowler,
+                currentOverNumber = currentOverNumber,
                 strikerStat = strikerStat,
                 nonStrikerStat = nonStrikerStat,
                 bowlerStat = bowlerStat,
                 primaryColor = primaryColor,
                 accentColor = accentColor,
                 onChangeBatsman = { showChangeBatsmanDialog = true },
+                onSelectBowler = { showSelectBowlerDialog = true },
                 onRotateStrike = { viewModel.rotateStrike() },
                 onEditPlayerName = { teamId, p -> editingPlayerTarget = Pair(teamId, p) }
             )
         }
 
-        // 3. Quick Action Toolbar: Undo, Change Batsman, Change Bowler, Commentary Toggle
+        // 3. Quick Action Toolbar: Undo, Change Batsman, Select Bowler, Rotate Strike, Commentary Toggle
         item {
             Card(
                 modifier = Modifier
@@ -128,22 +143,34 @@ fun LiveScoringScreen(
                             contentColor = Color.White
                         ),
                         shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                     ) {
-                        Icon(Icons.Default.Undo, contentDescription = "Undo", modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("UNDO BALL", fontWeight = FontWeight.Black, fontSize = 12.sp)
+                        Icon(Icons.Default.Undo, contentDescription = "Undo", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("UNDO", fontWeight = FontWeight.Black, fontSize = 11.5.sp)
+                    }
+
+                    // Select Bowler button (Explicitly requested: "select Boller from selected team while scoring")
+                    OutlinedButton(
+                        onClick = { showSelectBowlerDialog = true },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = accentColor),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Icon(Icons.Default.SportsBaseball, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Bowler", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
                     }
 
                     // Change Batsman button
                     OutlinedButton(
                         onClick = { showChangeBatsmanDialog = true },
                         shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                     ) {
-                        Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Change Batsman", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Batsmen", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
                     }
 
                     // Rotate Strike button
@@ -193,54 +220,106 @@ fun LiveScoringScreen(
             }
         }
 
-        // 5. Fast-Action Keypad: Runs, Only Wide & No-Ball, Wicket
+        // 5. Fast-Action Keypad: Runs, Full Extras (Wides 1-5, No-Balls 1-7, Byes 1-5, Leg-Byes 1-5), Wicket
         item {
             ScoringKeypad(
+                isWaitingForNewBowler = isWaitingForBowler,
+                overNumber = currentOverNumber,
+                onPromptSelectBowler = { showSelectBowlerDialog = true },
                 onScoreRuns = { runs ->
-                    viewModel.recordBall(
-                        runsBat = runs,
-                        extraType = ExtraType.NONE,
-                        extraRuns = 0,
-                        isWicket = false,
-                        commentaryText = commentaryInput
-                    )
-                    commentaryInput = ""
+                    if (isWaitingForBowler) {
+                        showSelectBowlerDialog = true
+                    } else {
+                        viewModel.recordBall(
+                            runsBat = runs,
+                            extraType = ExtraType.NONE,
+                            extraRuns = 0,
+                            isWicket = false,
+                            commentaryText = commentaryInput
+                        )
+                        commentaryInput = ""
+                    }
                 },
-                onQuickWide = {
-                    // Dedicated Wide option: +1 extra run, ball not counted
-                    viewModel.recordBall(
-                        runsBat = 0,
-                        extraType = ExtraType.WIDE,
-                        extraRuns = 1,
-                        isWicket = false,
-                        commentaryText = commentaryInput.ifBlank { "Wide ball outside off stump." }
-                    )
-                    commentaryInput = ""
-                },
-                onQuickNoBall = {
-                    // Open dedicated No-Ball extra runs dialog
-                    showNoBallDialog = true
-                },
-                onNoBallRuns = { runsBat ->
-                    viewModel.recordBall(
-                        runsBat = runsBat,
-                        extraType = ExtraType.NO_BALL,
-                        extraRuns = 1,
-                        isWicket = false,
-                        commentaryText = commentaryInput.ifBlank {
-                            when (runsBat) {
-                                6 -> "NO BALL & SIX! Bowler oversteps and is punished for a maximum! Free hit next!"
-                                4 -> "NO BALL & FOUR! Smashed to the fence off the illegal delivery! Free hit next!"
-                                1 -> "No ball! Single taken, strike rotates. Free hit signaled next ball."
-                                0 -> "No ball! Bowler oversteps the line. 1 penalty run. Free hit next!"
-                                else -> "No ball! $runsBat runs scored off the bat. Free hit next!"
+                onQuickWideRuns = { totalWideRuns ->
+                    if (isWaitingForBowler) {
+                        showSelectBowlerDialog = true
+                    } else {
+                        // Total wide runs (1 penalty + overthrows/boundary)
+                        viewModel.recordBall(
+                            runsBat = 0,
+                            extraType = ExtraType.WIDE,
+                            extraRuns = totalWideRuns,
+                            isWicket = false,
+                            commentaryText = commentaryInput.ifBlank {
+                                if (totalWideRuns == 1) "Wide ball! 1 extra run added."
+                                else "Wide + ${totalWideRuns - 1} extra overthrows/boundary! Total $totalWideRuns wides."
                             }
-                        }
-                    )
-                    commentaryInput = ""
+                        )
+                        commentaryInput = ""
+                    }
                 },
-                onOpenExtrasModal = { customExtrasDialog = true },
-                onOpenWicketModal = { showWicketDialog = true },
+                onQuickNoBallModal = {
+                    if (isWaitingForBowler) {
+                        showSelectBowlerDialog = true
+                    } else {
+                        showNoBallDialog = true
+                    }
+                },
+                onNoBallBatRuns = { runsBat ->
+                    if (isWaitingForBowler) {
+                        showSelectBowlerDialog = true
+                    } else {
+                        viewModel.recordBall(
+                            runsBat = runsBat,
+                            extraType = ExtraType.NO_BALL,
+                            extraRuns = 1,
+                            isWicket = false,
+                            commentaryText = commentaryInput.ifBlank {
+                                when (runsBat) {
+                                    6 -> "NO BALL & SIX! Bowler oversteps and is punished for a maximum! Free hit next!"
+                                    4 -> "NO BALL & FOUR! Smashed to the fence off the illegal delivery! Free hit next!"
+                                    5 -> "NO BALL + 5 runs (overthrows)! Free hit next!"
+                                    3 -> "NO BALL + 3 runs! Free hit next!"
+                                    2 -> "NO BALL + 2 runs! Free hit next!"
+                                    1 -> "No ball! Single taken. Free hit next!"
+                                    0 -> "No ball! 1 penalty run. Free hit next!"
+                                    else -> "No ball! $runsBat runs scored off the bat. Free hit next!"
+                                }
+                            }
+                        )
+                        commentaryInput = ""
+                    }
+                },
+                onQuickByesRuns = { byeRuns, isLegBye ->
+                    if (isWaitingForBowler) {
+                        showSelectBowlerDialog = true
+                    } else {
+                        val type = if (isLegBye) ExtraType.LEG_BYE else ExtraType.BYE
+                        val typeName = if (isLegBye) "Leg Bye" else "Bye"
+                        viewModel.recordBall(
+                            runsBat = 0,
+                            extraType = type,
+                            extraRuns = byeRuns,
+                            isWicket = false,
+                            commentaryText = commentaryInput.ifBlank { "$byeRuns $typeName(s) taken by the batsmen." }
+                        )
+                        commentaryInput = ""
+                    }
+                },
+                onOpenExtrasModal = {
+                    if (isWaitingForBowler) {
+                        showSelectBowlerDialog = true
+                    } else {
+                        customExtrasDialog = true
+                    }
+                },
+                onOpenWicketModal = {
+                    if (isWaitingForBowler) {
+                        showSelectBowlerDialog = true
+                    } else {
+                        showWicketDialog = true
+                    }
+                },
                 primaryColor = primaryColor,
                 accentColor = accentColor
             )
@@ -260,6 +339,22 @@ fun LiveScoringScreen(
     }
 
     // --- Dialogs ---
+
+    if (showSelectBowlerDialog && inn != null) {
+        SelectBowlerDialog(
+            bowlingSquad = bowlingTeam.players,
+            currentBowlerId = inn.currentBowlerId,
+            lastOverBowlerId = inn.lastOverBowlerId,
+            isWaitingForNewBowler = inn.isWaitingForNewBowler || inn.currentBowlerId.isBlank(),
+            overNumber = currentOverNumber,
+            bowlingStats = inn.bowlingStats,
+            onDismiss = { showSelectBowlerDialog = false },
+            onSelectBowler = { bowlerId ->
+                viewModel.changeBowler(bowlerId)
+                showSelectBowlerDialog = false
+            }
+        )
+    }
 
     if (showChangeBatsmanDialog && inn != null) {
         ChangeBatsmanDialog(
@@ -503,12 +598,15 @@ private fun CreaseTrackerCard(
     striker: Player?,
     nonStriker: Player?,
     bowler: Player?,
+    isWaitingForBowler: Boolean = false,
+    currentOverNumber: Int = 1,
     strikerStat: BattingStat?,
     nonStrikerStat: BattingStat?,
     bowlerStat: BowlingStat?,
     primaryColor: Color,
     accentColor: Color,
     onChangeBatsman: () -> Unit,
+    onSelectBowler: () -> Unit,
     onRotateStrike: () -> Unit,
     onEditPlayerName: (teamId: String, player: Player) -> Unit
 ) {
@@ -650,37 +748,78 @@ private fun CreaseTrackerCard(
 
             Divider(modifier = Modifier.padding(vertical = 10.dp))
 
-            // Bowler Row
+            // Bowler Row with Direct "Change Bowler" Action
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isWaitingForBowler) Color(0xFFFFF3E0) else accentColor.copy(alpha = 0.08f))
+                    .border(
+                        if (isWaitingForBowler) 1.5.dp else 0.dp,
+                        if (isWaitingForBowler) Color(0xFFE65100) else Color.Transparent,
+                        RoundedCornerShape(8.dp)
+                    )
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.SportsBaseball, contentDescription = null, tint = accentColor, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Column(modifier = Modifier.clickable {
-                        bowler?.let { onEditPlayerName("bowling", it) }
-                    }) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onSelectBowler() },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.SportsBaseball,
+                        contentDescription = null,
+                        tint = if (isWaitingForBowler) Color(0xFFE65100) else accentColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = bowler?.name ?: "Current Bowler",
+                                text = if (isWaitingForBowler) "Select Bowler (Over $currentOverNumber)" else (bowler?.name ?: "Select Bowler"),
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 13.5.sp
+                                fontSize = 14.sp,
+                                color = if (isWaitingForBowler) Color(0xFFE65100) else accentColor
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Icon(Icons.Default.Edit, contentDescription = "Edit bowler", modifier = Modifier.size(12.dp), tint = accentColor)
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = if (isWaitingForBowler) Color(0xFFE65100) else accentColor.copy(alpha = 0.2f),
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    if (isWaitingForBowler) "SELECT NEW" else "CHANGE",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isWaitingForBowler) Color.White else accentColor
+                                )
+                            }
                         }
-                        val econ = String.format(Locale.US, "%.2f", bowlerStat?.economy ?: 0.0)
-                        Text(
-                            text = "Econ: $econ • Wides: ${bowlerStat?.wides ?: 0} • NB: ${bowlerStat?.noBalls ?: 0}",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        if (isWaitingForBowler) {
+                            Text(
+                                text = "Over complete • Choose next bowler to bowl",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFFD84315)
+                            )
+                        } else {
+                            val econ = String.format(Locale.US, "%.2f", bowlerStat?.economy ?: 0.0)
+                            Text(
+                                text = "Econ: $econ • Wd: ${bowlerStat?.wides ?: 0} • NB: ${bowlerStat?.noBalls ?: 0}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 
-                Column(horizontalAlignment = Alignment.End) {
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    modifier = Modifier.clickable { onSelectBowler() }
+                ) {
                     Text(
                         text = "${bowlerStat?.wickets ?: 0} - ${bowlerStat?.runsConceded ?: 0}",
                         fontWeight = FontWeight.Black,
@@ -754,10 +893,14 @@ private fun OverStripCard(deliveries: List<BallDelivery>) {
 
 @Composable
 private fun ScoringKeypad(
+    isWaitingForNewBowler: Boolean = false,
+    overNumber: Int = 1,
+    onPromptSelectBowler: () -> Unit = {},
     onScoreRuns: (Int) -> Unit,
-    onQuickWide: () -> Unit,
-    onQuickNoBall: () -> Unit,
-    onNoBallRuns: (Int) -> Unit,
+    onQuickWideRuns: (Int) -> Unit,
+    onQuickNoBallModal: () -> Unit,
+    onNoBallBatRuns: (Int) -> Unit,
+    onQuickByesRuns: (runs: Int, isLegBye: Boolean) -> Unit,
     onOpenExtrasModal: () -> Unit,
     onOpenWicketModal: () -> Unit,
     primaryColor: Color,
@@ -771,10 +914,49 @@ private fun ScoringKeypad(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
+            if (isWaitingForNewBowler) {
+                Surface(
+                    color = Color(0xFFFFF3E0),
+                    shape = RoundedCornerShape(10.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFB74D)),
+                    modifier = Modifier.fillMaxWidth().clickable { onPromptSelectBowler() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.SportsBaseball, contentDescription = null, tint = Color(0xFFE65100), modifier = Modifier.size(24.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Over ${overNumber - 1} Complete! Select New Bowler",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFFE65100)
+                            )
+                            Text(
+                                "Bowler must be changed before scoring the next over.",
+                                fontSize = 11.5.sp,
+                                color = Color(0xFFD84315)
+                            )
+                        }
+                        Button(
+                            onClick = onPromptSelectBowler,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100)),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("SELECT", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
             Text("FAST-ACTION SCORING KEYPAD", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = primaryColor)
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Row 1: 0, 1, 2, 3
+            // Row 1: 0 (Dot), 1, 2, 3
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 KeypadRunButton(label = "0", subtitle = "Dot", modifier = Modifier.weight(1f)) { onScoreRuns(0) }
                 KeypadRunButton(label = "1", subtitle = "Single", modifier = Modifier.weight(1f)) { onScoreRuns(1) }
@@ -784,96 +966,100 @@ private fun ScoringKeypad(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Row 2: 4 (Four), 6 (Six), Wicket
+            // Row 2: 4 (Four), 5, 6 (Six), Wicket
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 // Four
                 Button(
                     onClick = { onScoreRuns(4) },
-                    modifier = Modifier.weight(1f).height(54.dp),
+                    modifier = Modifier.weight(1f).height(52.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("4", fontWeight = FontWeight.Black, fontSize = 20.sp, color = Color.White)
-                        Text("FOUR", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.9f))
+                        Text("4", fontWeight = FontWeight.Black, fontSize = 18.sp, color = Color.White)
+                        Text("FOUR", fontSize = 8.5.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.9f))
+                    }
+                }
+
+                // Five
+                FilledTonalButton(
+                    onClick = { onScoreRuns(5) },
+                    modifier = Modifier.weight(0.8f).height(52.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("5", fontWeight = FontWeight.Black, fontSize = 18.sp)
+                        Text("Runs", fontSize = 8.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
 
                 // Six
                 Button(
                     onClick = { onScoreRuns(6) },
-                    modifier = Modifier.weight(1f).height(54.dp),
+                    modifier = Modifier.weight(1f).height(52.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("6", fontWeight = FontWeight.Black, fontSize = 20.sp, color = Color.White)
-                        Text("SIX", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.9f))
+                        Text("6", fontWeight = FontWeight.Black, fontSize = 18.sp, color = Color.White)
+                        Text("SIX", fontSize = 8.5.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.9f))
                     }
                 }
 
                 // Wicket
                 Button(
                     onClick = onOpenWicketModal,
-                    modifier = Modifier.weight(1.2f).height(54.dp),
+                    modifier = Modifier.weight(1.3f).height(52.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("WICKET", fontWeight = FontWeight.Black, fontSize = 14.sp, color = Color.White)
-                        Text("Dismissal Flow", fontSize = 9.sp, color = Color.White.copy(alpha = 0.85f))
+                        Text("WICKET", fontWeight = FontWeight.Black, fontSize = 13.sp, color = Color.White)
+                        Text("Out / Dismiss", fontSize = 8.5.sp, color = Color.White.copy(alpha = 0.85f))
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Row 3: Dedicated Wide & No-Ball Options (As requested: "add options only wide and no ball")
-            Text("EXTRAS (FAST ACCESS)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Wide Button
-                OutlinedButton(
-                    onClick = onQuickWide,
-                    modifier = Modifier.weight(1f).height(46.dp),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFF57F17))
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("WD", fontWeight = FontWeight.Black, fontSize = 14.sp)
-                        Text("+1 Wide", fontSize = 9.sp)
-                    }
-                }
-
-                // No Ball Button (Full Modal with bat runs, byes, leg-byes)
-                OutlinedButton(
-                    onClick = onQuickNoBall,
-                    modifier = Modifier.weight(1f).height(46.dp),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFD84315))
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("NB...", fontWeight = FontWeight.Black, fontSize = 13.sp)
-                        Text("No Ball Options", fontSize = 8.5.sp)
-                    }
-                }
-
-                // More Extras (Byes, Leg Byes, Wides with extra runs)
-                FilledTonalButton(
-                    onClick = onOpenExtrasModal,
-                    modifier = Modifier.weight(1f).height(46.dp),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("More Extras", fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                        Text("Bye / LB / runs", fontSize = 9.sp)
+            // Section 1: Wide Balls (1, 2, 3, 4, 5)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("WIDE BALLS (+EXTRAS):", fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF57F17))
+                Text("Ball not counted", fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(1, 2, 3, 4, 5).forEach { r ->
+                    OutlinedButton(
+                        onClick = { onQuickWideRuns(r) },
+                        modifier = Modifier.weight(1f).height(38.dp),
+                        contentPadding = PaddingValues(0.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFF57F17))
+                    ) {
+                        Text(if (r == 1) "1 WD" else "$r WD", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
-            Text("NO BALL EXTRA RUNS (1-TAP):", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFD84315))
+
+            // Section 2: No Balls (NB+0 to NB+6 + Options dialog)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("NO BALLS (NB + BAT RUNS):", fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFFD84315))
+                Text("Free Hit Next", fontSize = 10.sp, color = Color(0xFFD84315), fontWeight = FontWeight.SemiBold)
+            }
             Spacer(modifier = Modifier.height(4.dp))
             Row(
                 modifier = Modifier
@@ -881,45 +1067,93 @@ private fun ScoringKeypad(
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                OutlinedButton(
-                    onClick = { onNoBallRuns(0) },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFD84315))
-                ) {
-                    Text("NB+0 (1)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                listOf(0, 1, 2, 3, 4, 5, 6).forEach { batRuns ->
+                    val (label, isSpecial) = when (batRuns) {
+                        0 -> Pair("NB+0 (1)", false)
+                        4 -> Pair("NB+4 (5)", true)
+                        6 -> Pair("NB+6 (7)", true)
+                        else -> Pair("NB+$batRuns (${batRuns + 1})", false)
+                    }
+                    if (isSpecial) {
+                        Button(
+                            onClick = { onNoBallBatRuns(batRuns) },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (batRuns == 4) Color(0xFF2E7D32) else Color(0xFFE65100)
+                            ),
+                            modifier = Modifier.height(38.dp)
+                        ) {
+                            Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = { onNoBallBatRuns(batRuns) },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFD84315)),
+                            modifier = Modifier.height(38.dp)
+                        ) {
+                            Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
-                OutlinedButton(
-                    onClick = { onNoBallRuns(1) },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                FilledTonalButton(
+                    onClick = onQuickNoBallModal,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                     shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFD84315))
+                    modifier = Modifier.height(38.dp)
                 ) {
-                    Text("NB+1 (2)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("NB More...", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
-                OutlinedButton(
-                    onClick = { onNoBallRuns(2) },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFD84315))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Section 3: Byes Runs (1, 2, 3, 4, 5) & Leg Byes (1, 2, 3, 4, 5)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("BYES (B) & LEG BYES (LB):", fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = primaryColor)
+                TextButton(
+                    onClick = onOpenExtrasModal,
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
                 ) {
-                    Text("NB+2 (3)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("Custom Extras", fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = primaryColor)
                 }
-                Button(
-                    onClick = { onNoBallRuns(4) },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
-                ) {
-                    Text("NB+4 FOUR", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(1, 2, 3, 4, 5).forEach { r ->
+                    FilledTonalButton(
+                        onClick = { onQuickByesRuns(r, false) },
+                        modifier = Modifier.weight(1f).height(36.dp),
+                        contentPadding = PaddingValues(0.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("${r}B", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
-                Button(
-                    onClick = { onNoBallRuns(6) },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
-                ) {
-                    Text("NB+6 SIX", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(1, 2, 3, 4, 5).forEach { r ->
+                    OutlinedButton(
+                        onClick = { onQuickByesRuns(r, true) },
+                        modifier = Modifier.weight(1f).height(36.dp),
+                        contentPadding = PaddingValues(0.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("${r}LB", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
@@ -1039,21 +1273,21 @@ private fun CustomExtrasSelectorDialog(
                 if (selectedType == ExtraType.WIDE) {
                     Text("Total Wide Runs (1 penalty + overthrows):", fontSize = 12.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf(1, 2, 3, 5).forEach { r ->
+                        listOf(1, 2, 3, 4, 5).forEach { r ->
                             FilterChip(selected = extraRuns == r, onClick = { extraRuns = r }, label = { Text("$r WD") })
                         }
                     }
                 } else if (selectedType == ExtraType.NO_BALL) {
                     Text("Runs scored off the bat (plus 1 NB):", fontSize = 12.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf(0, 1, 2, 4, 6).forEach { r ->
+                        listOf(0, 1, 2, 3, 4, 5, 6).forEach { r ->
                             FilterChip(selected = batRuns == r, onClick = { batRuns = r }, label = { Text("$r runs") })
                         }
                     }
                 } else {
                     Text("Byes / Leg Byes completed:", fontSize = 12.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf(1, 2, 3, 4).forEach { r ->
+                        listOf(1, 2, 3, 4, 5).forEach { r ->
                             FilterChip(selected = extraRuns == r, onClick = { extraRuns = r }, label = { Text("$r runs") })
                         }
                     }

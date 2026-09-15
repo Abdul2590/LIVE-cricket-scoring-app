@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -101,6 +102,7 @@ fun NoBallOptionsDialog(
                         Triple(2, "NB + 2 Double (+3)", "3 runs total"),
                         Triple(3, "NB + 3 Three (+4)", "4 runs (strike rotates)"),
                         Triple(4, "NB + 4 FOUR! (+5)", "5 runs (boundary scored!)"),
+                        Triple(5, "NB + 5 Five (+6)", "6 runs (overthrows/running)"),
                         Triple(6, "NB + 6 SIX! (+7)", "7 runs (maximum scored!)")
                     )
 
@@ -157,8 +159,11 @@ fun NoBallOptionsDialog(
                     }
 
                     Text("Runs Run (1 NB penalty + Byes):", fontSize = 12.5.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(1, 2, 3, 4).forEach { r ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(1, 2, 3, 4, 5).forEach { r ->
                             FilterChip(
                                 selected = byeRuns == r,
                                 onClick = { byeRuns = r },

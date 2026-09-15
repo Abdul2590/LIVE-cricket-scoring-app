@@ -44,9 +44,11 @@ data class Team(
 )
 
 enum class MatchType(val defaultOvers: Int, val displayName: String) {
-    T20(20, "T20 Match"),
-    T10(10, "T10 Super Blitz"),
-    ODI(50, "ODI One Day"),
+    T5(5, "5 Overs (T5)"),
+    T10(10, "10 Overs (T10)"),
+    T15(15, "15 Overs (T15)"),
+    T20(20, "20 Overs (T20)"),
+    ODI(50, "50 Overs (ODI)"),
     CUSTOM(5, "Custom Overs")
 }
 
@@ -202,6 +204,8 @@ data class Innings(
     val strikerId: String = "",
     val nonStrikerId: String = "",
     val currentBowlerId: String = "",
+    val lastOverBowlerId: String = "",
+    val isWaitingForNewBowler: Boolean = false,
     val battingStats: List<BattingStat> = emptyList(),
     val bowlingStats: List<BowlingStat> = emptyList(),
     val deliveries: List<BallDelivery> = emptyList(),
@@ -296,12 +300,25 @@ data class DashboardSettings(
 )
 
 data class UserProfile(
-    val id: String = "user_default",
-    val displayName: String = "Official Match Scorer",
-    val email: String = "scorer.cricket@gmail.com",
-    val photoInitials: String = "CR",
-    val isGoogleUser: Boolean = true,
-    val backupDriveFolder: String = "CricLive/Backups"
+    val id: String = "local_user_1",
+    val displayName: String = "Rehman Shaikh",
+    val role: String = "Lead Scorer & Match Official",
+    val email: String = "rehman.shaikh4@gmail.com",
+    val photoInitials: String = "RS",
+    val autoSaveEnabled: Boolean = true,
+    val lastAutoSaveTime: String = "Never",
+    val totalSavedMatches: Int = 0,
+    val localStorageLocation: String = "Internal App Storage",
+    val storageStatusDescription: String = "Auto-save to local storage active"
+)
+
+data class LocalStorageInfo(
+    val totalMatches: Int = 0,
+    val totalTeams: Int = 0,
+    val totalDeliveries: Int = 0,
+    val estimatedSizeKb: Int = 0,
+    val lastSaveTime: String = "Never",
+    val isAutoSaveEnabled: Boolean = true
 )
 
 data class BackupItem(

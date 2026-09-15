@@ -38,7 +38,7 @@ enum class AppDestination(
     SCORER("scorer", "Live Scorer", Icons.Default.SportsCricket),
     FIXTURES("fixtures", "Fixtures", Icons.Default.CalendarMonth),
     SCORECARD("scorecard", "Scorecard", Icons.Default.Assessment),
-    TEAMS_CLOUD("teams", "Teams & Cloud", Icons.Default.CloudSync)
+    TEAMS_CLOUD("teams", "Teams & Storage", Icons.Default.Storage)
 }
 
 class MainActivity : ComponentActivity() {

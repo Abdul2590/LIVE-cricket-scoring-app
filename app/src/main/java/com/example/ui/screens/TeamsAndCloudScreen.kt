@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -20,9 +21,11 @@ import androidx.compose.ui.unit.sp
 import com.example.model.*
 import com.example.ui.components.ConfirmDeleteDialog
 import com.example.ui.components.CustomTeamEditorDialog
+import com.example.ui.components.ExportAllAppDataDialog
 import com.example.ui.components.ExportTeamsDialog
-import com.example.ui.components.GoogleUserSwitcherDialog
 import com.example.ui.components.ImportTeamsDialog
+import com.example.ui.components.RestoreAllAppDataDialog
+import com.example.ui.components.ScorerProfileDialog
 import com.example.viewmodel.CricketViewModel
 
 @Composable
@@ -32,15 +35,21 @@ fun TeamsAndCloudScreen(
 ) {
     val customTeams by viewModel.customTeams.collectAsState()
     val userProfile by viewModel.userProfile.collectAsState()
-    val backups by viewModel.backups.collectAsState()
-    val activeMatch by viewModel.activeMatch.collectAsState()
+    val isAutoSaving by viewModel.isAutoSaving.collectAsState()
+    val matches by viewModel.matches.collectAsState()
 
-    var showTeamEditor by remember { mutableStateOf<Team?>(null) } // null = create new, non-null = edit
-    var showUserDialog by remember { mutableStateOf(false) }
-    var showExportDialog by remember { mutableStateOf(false) }
-    var showImportDialog by remember { mutableStateOf(false) }
+    var showTeamEditor by remember { mutableStateOf<Team?>(null) }
+    var showProfileDialog by remember { mutableStateOf(false) }
+    var showExportAllDialog by remember { mutableStateOf(false) }
+    var showRestoreAllDialog by remember { mutableStateOf(false) }
+    var showExportTeamsDialog by remember { mutableStateOf(false) }
+    var showImportTeamsDialog by remember { mutableStateOf(false) }
     var teamToDelete by remember { mutableStateOf<Team?>(null) }
     var showDeleteAllTeamsDialog by remember { mutableStateOf(false) }
+
+    val storageInfo = remember(matches, customTeams, userProfile) {
+        viewModel.getLocalStorageInfo()
+    }
 
     LazyColumn(
         modifier = modifier
@@ -49,128 +58,225 @@ fun TeamsAndCloudScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Google Account Profile Card
+        // 1. Scorer Profile & Local Storage Auto-Save Card
         item {
             Card(
                 shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            shape = CircleShape,
-                            color = Color(0xFF4285F4),
-                            modifier = Modifier.size(46.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(userProfile.photoInitials, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(userProfile.displayName, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Surface(
-                                    shape = RoundedCornerShape(4.dp),
-                                    color = Color(0xFF34A853).copy(alpha = 0.2f)
-                                ) {
-                                    Text("Google Verified", color = Color(0xFF2E7D32), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
-                                }
-                            }
-                            Text(userProfile.email, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                    OutlinedButton(
-                        onClick = { showUserDialog = true },
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                    ) {
-                        Text("Switch", fontSize = 11.5.sp)
-                    }
-                }
-            }
-        }
-
-        // 2. Google Drive Cloud Sync & Backups
-        item {
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                    // Header Row: Scorer Profile
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.CloudSync, contentDescription = null, tint = Color(0xFF4285F4))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Google Drive Cloud Backups", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                        }
-                        Button(
-                            onClick = { viewModel.backupToDrive() },
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4285F4))
-                        ) {
-                            Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Backup Now", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        "Sync live match sessions and tournaments securely to your Google Drive for offline restoration.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    if (backups.isEmpty()) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Box(modifier = Modifier.padding(14.dp), contentAlignment = Alignment.Center) {
-                                Text("No cloud backups yet. Tap 'Backup Now' to create one.", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(46.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = userProfile.photoInitials.ifBlank { "RS" },
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(userProfile.displayName, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = if (userProfile.autoSaveEnabled) Color(0xFF34A853).copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant
+                                    ) {
+                                        Text(
+                                            text = if (userProfile.autoSaveEnabled) "AUTO-SAVE ACTIVE" else "AUTO-SAVE PAUSED",
+                                            color = if (userProfile.autoSaveEnabled) Color(0xFF2E7D32) else MaterialTheme.colorScheme.outline,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text(userProfile.role, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                    } else {
-                        backups.forEach { b ->
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
+
+                        OutlinedButton(
+                            onClick = { showProfileDialog = true },
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Settings", fontSize = 11.5.sp)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Local Storage Auto-Save Engine Details
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(10.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Save,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Local Storage Auto-Save Engine",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+
+                                if (isAutoSaving) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(14.dp),
+                                            strokeWidth = 2.dp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Saving...", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                            }
+
+                            // Storage Metrics Cards
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
                                 ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(b.matchTitle, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                        Text("${b.formattedDate} • ${b.fileSizeKb} KB JSON", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text("Matches Saved", fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                                        Text("${storageInfo.totalMatches}", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                     }
-                                    Row {
-                                        TextButton(onClick = { viewModel.restoreFromBackup(b) }) {
-                                            Text("Restore", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                        }
-                                        IconButton(onClick = { viewModel.deleteBackup(b.id) }, modifier = Modifier.size(28.dp)) {
-                                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
-                                        }
+                                }
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text("Custom Squads", fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                                        Text("${storageInfo.totalTeams}", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                     }
+                                }
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text("Balls Logged", fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                                        Text("${storageInfo.totalDeliveries}", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    }
+                                }
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text("Storage Size", fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                                        Text("~${storageInfo.estimatedSizeKb} KB", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    }
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Target: criclive_data/app_local_backup.json",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Text(
+                                    text = if (userProfile.lastAutoSaveTime.isNotBlank()) "Last saved: ${userProfile.lastAutoSaveTime}" else "Auto-save active",
+                                    fontSize = 10.5.sp,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+
+                            Text(
+                                text = "✓ Offline-first: Every live delivery, ball event, custom squad, and tournament fixture is continuously auto-saved directly on your device storage without requiring internet or cloud sign-in.",
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            // Quick Action Buttons for Full Local App Data
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = { viewModel.saveManualBackupSnapshot() },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Save Now", fontSize = 11.sp)
+                                }
+
+                                OutlinedButton(
+                                    onClick = { showExportAllDialog = true },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Backup, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Export Backup", fontSize = 11.sp)
+                                }
+
+                                OutlinedButton(
+                                    onClick = { showRestoreAllDialog = true },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Restore", fontSize = 11.sp)
                                 }
                             }
                         }
@@ -179,7 +285,7 @@ fun TeamsAndCloudScreen(
             }
         }
 
-        // 3. Custom Teams Manager ("Add customs Teams and save Teams data for further matches")
+        // 2. Custom Teams Manager ("Add customs Teams and save Teams data for further matches")
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
@@ -202,13 +308,13 @@ fun TeamsAndCloudScreen(
                     }
                 }
 
-                // Action Bar: Import, Export, Reset/Delete All
+                // Action Bar: Import, Export, Clear
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { showImportDialog = true },
+                        onClick = { showImportTeamsDialog = true },
                         modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         shape = RoundedCornerShape(8.dp)
@@ -219,7 +325,7 @@ fun TeamsAndCloudScreen(
                     }
 
                     OutlinedButton(
-                        onClick = { showExportDialog = true },
+                        onClick = { showExportTeamsDialog = true },
                         modifier = Modifier.weight(1f),
                         enabled = customTeams.isNotEmpty(),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
@@ -322,6 +428,41 @@ fun TeamsAndCloudScreen(
         }
     }
 
+    // Dialogs
+
+    // Scorer Profile Dialog
+    if (showProfileDialog) {
+        ScorerProfileDialog(
+            currentProfile = userProfile,
+            onDismiss = { showProfileDialog = false },
+            onSaveProfile = { name, role, email ->
+                viewModel.updateScorerProfile(name, role, email)
+            },
+            onToggleAutoSave = { enabled ->
+                viewModel.toggleAutoSave(enabled)
+            }
+        )
+    }
+
+    // Export All Application Data Dialog
+    if (showExportAllDialog) {
+        ExportAllAppDataDialog(
+            jsonString = viewModel.exportAllApplicationDataJson(),
+            onDismiss = { showExportAllDialog = false }
+        )
+    }
+
+    // Restore All Application Data Dialog
+    if (showRestoreAllDialog) {
+        RestoreAllAppDataDialog(
+            onDismiss = { showRestoreAllDialog = false },
+            onRestore = { json ->
+                viewModel.restoreAllApplicationDataJson(json)
+                showRestoreAllDialog = false
+            }
+        )
+    }
+
     // Custom Team Editor dialog
     showTeamEditor?.let { editingTeam ->
         CustomTeamEditorDialog(
@@ -334,35 +475,23 @@ fun TeamsAndCloudScreen(
         )
     }
 
-    // Google User switcher dialog
-    if (showUserDialog) {
-        GoogleUserSwitcherDialog(
-            currentProfile = userProfile,
-            onDismiss = { showUserDialog = false },
-            onLogin = { name, email ->
-                viewModel.switchGoogleUser(name, email)
-                showUserDialog = false
-            }
-        )
-    }
-
     // Export Teams Dialog
-    if (showExportDialog) {
+    if (showExportTeamsDialog) {
         ExportTeamsDialog(
             teams = customTeams,
             jsonString = viewModel.exportTeamsJson(),
-            onDismiss = { showExportDialog = false },
+            onDismiss = { showExportTeamsDialog = false },
             onCopied = { /* Handled with toast in dialog */ }
         )
     }
 
     // Import Teams Dialog
-    if (showImportDialog) {
+    if (showImportTeamsDialog) {
         ImportTeamsDialog(
-            onDismiss = { showImportDialog = false },
+            onDismiss = { showImportTeamsDialog = false },
             onImport = { json, replaceExisting ->
                 viewModel.importTeamsJson(json, replaceExisting)
-                showImportDialog = false
+                showImportTeamsDialog = false
             }
         )
     }
